@@ -1,0 +1,57 @@
+{
+  "name": "@aifinpay/agent",
+  "version": "0.2.0-alpha.2",
+  "description": "Non-custodial multi-facilitator x402 client for autonomous AI agents (AiFinPay native + Coinbase x402 detection)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "x402",
+    "ai-agent",
+    "solana",
+    "polygon",
+    "payments",
+    "non-custodial",
+    "ed25519"
+  ],
+  "author": "CoinSecurities (SECCO) <contact@aifinpay.company>",
+  "license": "MIT",
+  "homepage": "https://github.com/AiFinPay/sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AiFinPay/sdk.git",
+    "directory": "node"
+  },
+  "bugs": "https://github.com/AiFinPay/sdk/issues",
+  "dependencies": {
+    "bs58": "^6.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

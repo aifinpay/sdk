@@ -1,0 +1,61 @@
+{
+  "name": "@aifinpay/mcp",
+  "version": "0.1.0-alpha.2",
+  "description": "MCP server exposing AiFinPay's autonomous x402 payment loop as agent tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "aifinpay-mcp": "bin/aifinpay-mcp.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "x402",
+    "ai-agent",
+    "mcp",
+    "model-context-protocol",
+    "payments",
+    "non-custodial",
+    "autonomous"
+  ],
+  "author": "CoinSecurities (SECCO) <contact@aifinpay.company>",
+  "license": "MIT",
+  "homepage": "https://github.com/AiFinPay/sdk#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AiFinPay/sdk.git",
+    "directory": "mcp"
+  },
+  "bugs": "https://github.com/AiFinPay/sdk/issues",
+  "dependencies": {
+    "@aifinpay/agent": "^0.2.0-alpha.2",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.5"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

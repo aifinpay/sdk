@@ -1,0 +1,22 @@
+{
+  "name": "aifinpay-echo-x402-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Reference x402-gated API service. Shows how a third-party AI service can charge per-call via AiFinPay in ~70 lines.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "demo:sdk": "node test-client.js"
+  },
+  "dependencies": {
+    "@aifinpay/agent": "^0.2.0-alpha.2",
+    "bs58": "^6.0.0",
+    "express": "^5.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

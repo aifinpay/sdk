@@ -1,0 +1,27 @@
+# node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+*.egg-info/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# secrets
+.env
+.env.local
+*.pem
+
+# package manager state
+.pnpm-store/
+.npm/

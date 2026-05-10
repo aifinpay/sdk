@@ -1,0 +1,693 @@
+// ──────────────────────────────────────────────────────────────────────────
+// AiFinPayAgent — unified, chain-opaque developer surface.
+//
+// Wraps the legacy chain-aware Agent (Solana keypair + native methods) and
+// adds an EVM signer plus high-level call/openSession/balance/verify flows.
+// Chain selection happens inside the SDK via the provider registry +
+// cost-band heuristics.
+//
+// This is the Phase 1 skeleton. Methods marked `// TODO(phase-N)` will be
+// wired up as the migration progresses (see Obsidian/22 - Migration Roadmap).
+// ──────────────────────────────────────────────────────────────────────────
+import nacl from "tweetnacl";
+import bs58 from "bs58";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  type PublicClient,
+  type WalletClient,
+} from "viem";
+import {
+  privateKeyToAccount,
+  generatePrivateKey,
+  type PrivateKeyAccount,
+} from "viem/accounts";
+import { polygon } from "viem/chains";
+import {
+  AiFinPayError,
+  X402Error,
+} from "./errors.js";
+import { Agent, type AgentOptions } from "./agent.js";
+
+// ── Types ──────────────────────────────────────────────────────────────────
+
+export type ChainId = "solana" | "polygon";
+
+export interface ProviderEntry {
+  name:            string;
+  display_name?:   string;
+  preferred_chain: ChainId;
+  accepted_chains: ChainId[];
+  price_usd:       number;
+  mode:            "per_call" | "session" | "both";
+  bridge_url:      string;
+  merchant_wallet: string;
+  service_type?:   string;
+  url?:            string;
+}
+
+export interface CallOptions {
+  provider:    string;
+  cost?:       number;
+  chain?:      ChainId;
+  bridgeUrl?:  string;
+  body?:       unknown;
+  method?:     string;
+  timeoutMs?:  number;
+  signal?:     AbortSignal;
+}
+
+export interface BalanceSnapshot {
+  agent_balance_usd: number;
+  chains: {
+    solana: {
+      sol:            number;
+      usdc:           number;
+      msecco_balance: number;
+    };
+    polygon: {
+      matic:          number;
+      usdc:           number;
+      msecco_balance: number;
+    };
+  };
+  spend_24h_usd: number;
+  budget_caps: {
+    daily_usd?:    number;
+    per_call_usd?: number;
+  };
+  priced_at: number;
+}
+
+export interface ReputationSnapshot {
+  trust_score:    number;
+  spend_score:    number;
+  tenure_days:    number;
+  verified:       boolean;
+  flags:          string[];
+}
+
+export interface BudgetCaps {
+  daily_usd?:    number;
+  per_call_usd?: number;
+}
+
+export interface SessionHandle {
+  id:           string;
+  provider:     string;
+  chain:        ChainId;
+  budget_usd:   number;
+  spent_usd:    number;
+  remaining_usd: number;
+  expires_at:   number;
+  call(body: unknown): Promise<Response>;
+  close(): Promise<SessionReceipt>;
+  abandon(): Promise<void>;
+}
+
+export interface SessionReceipt {
+  session_id:    string;
+  spent_usd:     number;
+  refund_usd:    number;
+  settlement_tx: string;
+  block:         number | string;
+}
+
+export interface AiFinPayAgentOptions extends AgentOptions {
+  registryUrl?:  string;     // default: ${baseUrl}/api/providers
+  evmPrivateKey?: `0x${string}`; // optional override; otherwise derived/generated
+  budgetCaps?:   BudgetCaps;
+  telemetry?:    boolean;    // default true
+  polygonRpc?:   string;     // default: https://polygon.drpc.org
+}
+
+// ── 402 challenge body shape returned by AiFinPay paid-proxy bridges ─────
+
+interface PayMaticChallenge {
+  error:    string;
+  protocol: string;
+  service:  string;
+  facilitator?: string;
+  pay_matic: {
+    chain:                 "polygon";
+    splitter:              string;
+    merchant_wallet:       string;
+    total_wei:             string;
+    merchant_amount_wei?:  string;
+    treasury_amount_wei?:  string;
+    ip_creator_amount_wei?: string;
+    order_id:              string;
+    function_signature?:   string;
+    ttl_seconds?:          number;
+  };
+  retry?: unknown;
+  instructions?: string[];
+}
+
+// ── B2BSplitter contract (deployed at 0xE34Fc0…8440 on Polygon mainnet) ──
+
+const SPLITTER_PAY_MATIC_ABI = [
+  {
+    type: "function",
+    name: "payMatic",
+    stateMutability: "payable",
+    inputs: [
+      { type: "address", name: "merchant" },
+      { type: "address", name: "ipCreator" },
+      { type: "string",  name: "orderId" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+// ── Errors ─────────────────────────────────────────────────────────────────
+
+export class ProviderUnknownError extends AiFinPayError {}
+export class WrongChainBalanceError extends AiFinPayError {
+  constructor(public has: ChainId[], public needed: ChainId, msg: string) {
+    super(msg);
+  }
+}
+export class InsufficientFundsError extends AiFinPayError {
+  constructor(public needed_usd: number, public available_usd: number, msg: string) {
+    super(msg);
+  }
+}
+export class BudgetCapExceededError extends AiFinPayError {
+  constructor(public kind: "daily" | "per_call", msg: string) {
+    super(msg);
+  }
+}
+export class SettlementError extends AiFinPayError {
+  constructor(public reason: string, public txHash?: string) {
+    super(`Settlement failed: ${reason}${txHash ? ` (tx ${txHash})` : ""}`);
+  }
+}
+export class SessionExpiredError extends AiFinPayError {
+  constructor(public session_id: string) {
+    super(`Session ${session_id} expired or closed`);
+  }
+}
+
+// ── Spend tracker (24h rolling) ────────────────────────────────────────────
+
+class SpendTracker {
+  private readonly ring: Array<{ at: number; usd: number }> = [];
+  add(usd: number): void {
+    const now = Date.now();
+    this.ring.push({ at: now, usd });
+    const cutoff = now - 24 * 3600 * 1000;
+    while (this.ring.length && this.ring[0]!.at < cutoff) this.ring.shift();
+  }
+  total24h(): number {
+    return this.ring.reduce((s, e) => s + e.usd, 0);
+  }
+}
+
+// ── Main class ─────────────────────────────────────────────────────────────
+
+const DEFAULT_REGISTRY_PATH = "/api/providers";
+
+export class AiFinPayAgent {
+  readonly inner:        Agent;            // existing Solana-flavoured agent
+  readonly evmAccount:   PrivateKeyAccount;
+  readonly registryUrl:  string;
+  readonly polygonRpc:   string;
+  private  cachedRegistry?: ProviderEntry[];
+  private  budgetCaps:     BudgetCaps;
+  private  spend24h        = new SpendTracker();
+  private  telemetry:      boolean;
+  private  _polygonPublic?: PublicClient;
+  private  _polygonWallet?: WalletClient;
+
+  private constructor(
+    inner:      Agent,
+    evmAccount: PrivateKeyAccount,
+    opts:       AiFinPayAgentOptions = {},
+  ) {
+    this.inner       = inner;
+    this.evmAccount  = evmAccount;
+    this.registryUrl = opts.registryUrl
+      ?? `${inner.baseUrl}${DEFAULT_REGISTRY_PATH}`;
+    this.budgetCaps  = opts.budgetCaps ?? {};
+    this.telemetry   = opts.telemetry !== false;
+    this.polygonRpc  = opts.polygonRpc ?? "https://polygon.drpc.org";
+  }
+
+  // Lazy viem clients — only spun up when a Polygon flow runs.
+  private polygonClients(): { publicClient: PublicClient; walletClient: WalletClient } {
+    if (!this._polygonPublic) {
+      this._polygonPublic = createPublicClient({
+        chain: polygon,
+        transport: http(this.polygonRpc),
+      });
+    }
+    if (!this._polygonWallet) {
+      this._polygonWallet = createWalletClient({
+        chain: polygon,
+        transport: http(this.polygonRpc),
+        account: this.evmAccount,
+      });
+    }
+    return { publicClient: this._polygonPublic, walletClient: this._polygonWallet };
+  }
+
+  // ── Constructors ─────────────────────────────────────────────────────────
+
+  /**
+   * Generate a fresh agent — new Solana keypair + new EVM keypair.
+   * Use `fromSeed()` to derive both from a single backup phrase instead.
+   */
+  static async new(opts: AiFinPayAgentOptions = {}): Promise<AiFinPayAgent> {
+    const inner = Agent.new(opts);
+    const evmKey = opts.evmPrivateKey ?? generatePrivateKey();
+    const evmAccount = privateKeyToAccount(evmKey);
+    return new AiFinPayAgent(inner, evmAccount, opts);
+  }
+
+  /**
+   * Derive both keypairs from a single 32-byte hex seed. Same seed →
+   * deterministic Solana pubkey AND EVM address. One backup phrase, two
+   * chains.
+   *
+   * Solana key = nacl.sign.keyPair.fromSeed(seed)
+   * EVM key    = keccak256(seed)[:32]    (independent path; not BIP-44
+   *                                       compatible — see design notes
+   *                                       in 23 - Unified SDK Design).
+   *
+   * TODO(phase-1): replace with BIP-39/BIP-44 derivation
+   *   m/44'/501'/0'/0' (Solana) + m/44'/60'/0'/0/0 (EVM) once the
+   *   wallet-import audit recommendation lands.
+   */
+  static async fromSeed(
+    seedHex: string,
+    opts: AiFinPayAgentOptions = {},
+  ): Promise<AiFinPayAgent> {
+    const seed = hexToBytes(seedHex.replace(/^0x/, ""));
+    if (seed.length !== 32) {
+      throw new AiFinPayError(`fromSeed: seed must be 32 bytes (64 hex chars)`);
+    }
+    const kp = nacl.sign.keyPair.fromSeed(seed);
+    const inner = (Agent as unknown as { _ofKeyPair(kp: nacl.SignKeyPair, opts?: AgentOptions): Agent })
+      ._ofKeyPair?.(kp, opts) ?? Agent.fromSecretB58(bs58.encode(kp.secretKey), opts);
+
+    // Derive EVM key from seed (independent, not BIP-44 — see TODO above)
+    const evmHex = ("0x" + bytesToHex(crypto32(seed))) as `0x${string}`;
+    const evmAccount = privateKeyToAccount(evmHex);
+    return new AiFinPayAgent(inner, evmAccount, opts);
+  }
+
+  /**
+   * Legacy: load the Solana side from an existing keypair, then either
+   * generate a fresh EVM key or import one with `attachEvmKey`.
+   */
+  static async fromSolanaSecret(
+    secretB58: string,
+    opts: AiFinPayAgentOptions = {},
+  ): Promise<AiFinPayAgent> {
+    const inner = Agent.fromSecretB58(secretB58, opts);
+    const evmKey = opts.evmPrivateKey ?? generatePrivateKey();
+    const evmAccount = privateKeyToAccount(evmKey);
+    return new AiFinPayAgent(inner, evmAccount, opts);
+  }
+
+  // ── Identity ────────────────────────────────────────────────────────────
+
+  get id(): string {
+    // Canonical: Solana pubkey for back-compat with the leaderboard / Seat PDA.
+    return this.inner.address;
+  }
+  get solanaAddress(): string { return this.inner.address; }
+  get evmAddress():    string { return this.evmAccount.address; }
+
+  // ── Registry ────────────────────────────────────────────────────────────
+
+  async fetchRegistry(force = false): Promise<ProviderEntry[]> {
+    if (this.cachedRegistry && !force) return this.cachedRegistry;
+    const r = await fetch(this.registryUrl);
+    if (!r.ok) {
+      throw new AiFinPayError(`provider registry ${this.registryUrl} → ${r.status}`);
+    }
+    const j = (await r.json()) as { providers?: ProviderEntry[] };
+    this.cachedRegistry = j.providers ?? [];
+    return this.cachedRegistry;
+  }
+
+  async resolveProvider(name: string): Promise<ProviderEntry> {
+    const reg = await this.fetchRegistry();
+    const hit = reg.find((p) => p.name === name);
+    if (!hit) {
+      throw new ProviderUnknownError(`Provider "${name}" not in registry ${this.registryUrl}`);
+    }
+    return hit;
+  }
+
+  // ── Budget caps ─────────────────────────────────────────────────────────
+
+  setBudget(caps: BudgetCaps): void {
+    this.budgetCaps = caps;
+  }
+
+  private checkBudget(costUsd: number): void {
+    if (this.budgetCaps.per_call_usd !== undefined && costUsd > this.budgetCaps.per_call_usd) {
+      throw new BudgetCapExceededError(
+        "per_call",
+        `cost $${costUsd} exceeds per-call cap $${this.budgetCaps.per_call_usd}`,
+      );
+    }
+    const after = this.spend24h.total24h() + costUsd;
+    if (this.budgetCaps.daily_usd !== undefined && after > this.budgetCaps.daily_usd) {
+      throw new BudgetCapExceededError(
+        "daily",
+        `daily spend ${after.toFixed(4)} would exceed cap $${this.budgetCaps.daily_usd}`,
+      );
+    }
+  }
+
+  // ── Routing — chain selection ───────────────────────────────────────────
+
+  /**
+   * Chain selection heuristic — see Obsidian/23 - Unified SDK Design §Routing.
+   *
+   *   1. Explicit override always wins (subject to provider acceptance).
+   *   2. Cost ≤ $0.005 + Solana per-call live + Solana accepted → Solana
+   *      (low gas wins for tiny calls).
+   *   3. Cost > $0.05 + Polygon accepted → Polygon
+   *      (better finality for high-value calls).
+   *   4. Middle band → provider.preferred_chain.
+   *   5. Fallback → first accepted chain.
+   *
+   * Solana per-call is gated on the deploy of `b2b_pay_with_split` —
+   * until then `solana` selection raises in `call()`.
+   */
+  private pickChain(provider: ProviderEntry, opts: CallOptions): ChainId {
+    const accepted = new Set<ChainId>(provider.accepted_chains);
+
+    // 1. Override.
+    if (opts.chain) {
+      if (!accepted.has(opts.chain)) {
+        throw new AiFinPayError(
+          `Provider ${provider.name} does not accept ${opts.chain}; accepted: ${provider.accepted_chains.join(", ")}`,
+        );
+      }
+      return opts.chain;
+    }
+
+    const cost = opts.cost ?? provider.price_usd;
+    const solanaPerCallLive = process.env.AIFINPAY_SOLANA_PER_CALL === "live";
+
+    // 2. Tiny calls → Solana.
+    if (cost <= 0.005 && accepted.has("solana") && solanaPerCallLive) {
+      return "solana";
+    }
+    // 3. Big calls → Polygon for finality.
+    if (cost > 0.05 && accepted.has("polygon")) {
+      return "polygon";
+    }
+    // 4. Middle band → preferred.
+    if (accepted.has(provider.preferred_chain)) {
+      return provider.preferred_chain;
+    }
+    // 5. Fallback.
+    if (provider.accepted_chains[0]) return provider.accepted_chains[0];
+    throw new AiFinPayError(
+      `Provider ${provider.name} declares no accepted_chains`,
+    );
+  }
+
+  // ── Verify (one-time on-chain registration) ─────────────────────────────
+
+  /**
+   * TODO(phase-4): mint AgentPassport on the cheapest chain available
+   * with the requested `stake_usd`. For now wires only the Solana side
+   * via the existing `reserveSeatInvoice` semantics.
+   */
+  async verify(_args?: { stake_usd?: number }): Promise<{ verified: boolean }> {
+    throw new AiFinPayError("verify() not implemented yet — see migration phase 4");
+  }
+
+  // ── Funding (deposit) ───────────────────────────────────────────────────
+
+  /**
+   * TODO(phase-1): pick a chain (preferred USDC on Polygon for stability;
+   * fallback Solana SOL). Return signed-tx instructions for the wallet.
+   */
+  async deposit(_usd: number, _opts?: { asset?: "USDC" | "USDT" | "SOL" | "MATIC"; chain?: ChainId }): Promise<unknown> {
+    throw new AiFinPayError("deposit() not implemented yet — see migration phase 1.5");
+  }
+
+  // ── Call ────────────────────────────────────────────────────────────────
+
+  /**
+   * High-level paid call. Resolves the provider, picks a chain, builds the
+   * payment, sends to the bridge, retries with payment proof.
+   *
+   * Phase 1 implementation: Polygon per-call splitter via on-chain
+   * `B2BSplitter.payMatic()`. Solana per-call branch lights up after
+   * Phase 2 (b2b_pay_with_split deploy via Squads).
+   */
+  async call(opts: CallOptions): Promise<Response> {
+    const provider = await this.resolveProvider(opts.provider);
+    const chain    = this.pickChain(provider, opts);
+    const cost     = opts.cost ?? provider.price_usd;
+
+    this.checkBudget(cost);
+
+    if (provider.mode === "session") {
+      throw new AiFinPayError(
+        `Provider ${provider.name} requires session mode — use openSession() (phase-3 feature)`,
+      );
+    }
+
+    const url = opts.bridgeUrl ?? provider.bridge_url;
+    if (!url) {
+      throw new AiFinPayError(`Provider ${provider.name} has no bridge_url`);
+    }
+
+    if (chain === "solana") {
+      throw new AiFinPayError(
+        `Solana per-call payment requires b2b_pay_with_split (phase-2). ` +
+          `Use chain: "polygon" override or wait for the Solana program upgrade.`,
+      );
+    }
+
+    const path = (() => {
+      if (provider.service_type === "search")    return "/search";
+      if (provider.service_type === "inference") return "/chat/completions";
+      if (provider.service_type === "compute")   return "/run";
+      if (provider.service_type === "analytics") return "/query";
+      return "/";
+    })();
+
+    const buildInit = (extraHeaders: Record<string, string> = {}): RequestInit => ({
+      method:  opts.method ?? "POST",
+      headers: { "content-type": "application/json", ...extraHeaders },
+      body:    opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal:  opts.signal,
+    });
+
+    // 1. Initial unauthenticated POST → expect 402 challenge from the bridge.
+    const fullUrl = url.replace(/\/$/, "") + path;
+    const initialResp = await this.inner.fetchImpl(fullUrl, buildInit());
+
+    if (initialResp.status !== 402) {
+      // Bridge didn't ask for payment — pass response through unchanged.
+      this.spend24h.add(cost);
+      if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, free: true });
+      return initialResp;
+    }
+
+    let challenge: PayMaticChallenge;
+    try {
+      challenge = (await initialResp.json()) as PayMaticChallenge;
+    } catch (e) {
+      throw new X402Error(`bridge returned 402 with non-JSON body`);
+    }
+    if (!challenge.pay_matic) {
+      throw new X402Error(
+        `bridge ${provider.name} returned 402 but no pay_matic block — only legacy AiFinPay/Coinbase facilitators not yet wired into AiFinPayAgent.call()`,
+      );
+    }
+    const pm = challenge.pay_matic;
+
+    // 2. Submit B2BSplitter.payMatic on Polygon mainnet.
+    const { publicClient, walletClient } = this.polygonClients();
+    const txHash = await walletClient.writeContract({
+      address:      pm.splitter as `0x${string}`,
+      abi:          SPLITTER_PAY_MATIC_ABI,
+      functionName: "payMatic",
+      args: [
+        pm.merchant_wallet as `0x${string}`,
+        "0x0000000000000000000000000000000000000000",
+        pm.order_id,
+      ],
+      value: BigInt(pm.total_wei),
+      chain: polygon,
+      account: this.evmAccount,
+    });
+
+    // 3. Wait for receipt (we only need inclusion for Polygon's 2s blocks).
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    if (receipt.status !== "success") {
+      throw new AiFinPayError(`Polygon tx reverted: ${txHash}`);
+    }
+
+    // 4. Retry the bridge with payment proof.
+    const paidResp = await this.inner.fetchImpl(fullUrl, buildInit({
+      "x-tx-hash":  txHash,
+      "x-order-id": pm.order_id,
+    }));
+    if (!paidResp.ok) {
+      const detail = await paidResp.text().catch(() => "<unreadable>");
+      throw new AiFinPayError(
+        `Bridge retry failed ${paidResp.status} after on-chain payment ${txHash}: ${detail.slice(0, 300)}`,
+      );
+    }
+
+    this.spend24h.add(cost);
+    if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, tx: txHash });
+    return paidResp;
+  }
+
+  // ── Sessions ────────────────────────────────────────────────────────────
+
+  /**
+   * TODO(phase-3): open a metered budget session.
+   */
+  async openSession(_args: {
+    provider:    string;
+    budget_usd:  number;
+    ttl_seconds?: number;
+  }): Promise<SessionHandle> {
+    throw new AiFinPayError("openSession() not implemented yet — see migration phase 3");
+  }
+
+  // ── Balance ─────────────────────────────────────────────────────────────
+
+  /**
+   * Snapshot the agent's funds across both chains, USD-normalised.
+   *
+   * Phase 1.4: native MATIC + native SOL via RPC; ERC-20 / SPL token balances
+   * deferred (we don't yet need them for the unified `call()` flow which
+   * settles in MATIC). Pyth feeds are TODO; for now uses
+   * `AIFINPAY_MATIC_USD` and `AIFINPAY_SOL_USD` env, defaulting to 0.7 and 200.
+   */
+  async balance(): Promise<BalanceSnapshot> {
+    const maticUsd = parseFloat(process.env.AIFINPAY_MATIC_USD ?? "0.70");
+    const solUsd   = parseFloat(process.env.AIFINPAY_SOL_USD   ?? "200");
+
+    const polygon = await this.fetchPolygonNative().catch(() => 0);
+    const solana  = await this.fetchSolanaNative().catch(() => 0);
+
+    const polygonUsd = polygon * maticUsd;
+    const solanaUsd  = solana * solUsd;
+
+    return {
+      agent_balance_usd: polygonUsd + solanaUsd,
+      chains: {
+        solana:  { sol: solana,   usdc: 0, msecco_balance: 0 },
+        polygon: { matic: polygon, usdc: 0, msecco_balance: 0 },
+      },
+      spend_24h_usd: this.spend24h.total24h(),
+      budget_caps: this.budgetCaps,
+      priced_at: Math.floor(Date.now() / 1000),
+    };
+  }
+
+  private async fetchPolygonNative(): Promise<number> {
+    const { publicClient } = this.polygonClients();
+    const wei = await publicClient.getBalance({
+      address: this.evmAccount.address,
+    });
+    return Number(wei) / 1e18;
+  }
+
+  private async fetchSolanaNative(): Promise<number> {
+    // Use raw JSON-RPC to avoid pulling @solana/web3.js as a dep.
+    const rpc = process.env.AIFINPAY_SOLANA_RPC || "https://api.mainnet.solana.com";
+    const r = await this.inner.fetchImpl(rpc, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getBalance",
+        params: [this.solanaAddress],
+      }),
+    });
+    if (!r.ok) return 0;
+    const j = (await r.json()) as { result?: { value?: number } };
+    const lamports = j.result?.value ?? 0;
+    return lamports / 1e9;
+  }
+
+  // ── Reputation ──────────────────────────────────────────────────────────
+
+  /**
+   * TODO(phase-4 / phase-5): query operator backend reputation engine.
+   */
+  async reputation(): Promise<ReputationSnapshot> {
+    return {
+      trust_score: 0,
+      spend_score: 0,
+      tenure_days: 0,
+      verified:    false,
+      flags:       [],
+    };
+  }
+
+  // ── Telemetry (opt-out) ─────────────────────────────────────────────────
+
+  private reportTelemetry(payload: Record<string, unknown>): void {
+    // Fire-and-forget. No body content, only metadata.
+    void this.inner.fetchImpl(`${this.inner.baseUrl}/api/telemetry`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent_id: this.id, ...payload, ts: Date.now() }),
+    }).catch(() => {});
+  }
+}
+
+// ── Internal hex helpers (small, no extra deps) ────────────────────────────
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+
+function bytesToHex(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i]!.toString(16).padStart(2, "0");
+  return s;
+}
+
+/**
+ * Derive a 32-byte EVM private key from a 32-byte seed using a domain-separated
+ * SHA-256 hash. Independent of the Solana keypair; same seed reproduces the
+ * same EVM key.
+ *
+ * Domain separator: "aifinpay:evm:v1\0"  prevents accidental key collision with
+ * any other system that hashes this seed.
+ *
+ * TODO(phase-1): swap to a real BIP-44 path (`m/44'/60'/0'/0/0`) once we ship
+ * BIP-39 mnemonic support. This helper is stop-gap so the unified API can ship
+ * before audit-grade derivation lands.
+ */
+function crypto32(seed: Uint8Array): Uint8Array {
+  // Lazy require to avoid pulling node:crypto into bundlers that don't need it.
+  const c = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto;
+  if (c?.subtle) {
+    // Browser / modern Node — but subtle is async, and we're sync here.
+    // Fall through to the node:crypto path.
+  }
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeCrypto = require("node:crypto");
+  const h = nodeCrypto.createHash("sha256");
+  h.update("aifinpay:evm:v1\0");
+  h.update(seed);
+  return new Uint8Array(h.digest());
+}

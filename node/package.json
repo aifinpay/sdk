@@ -1,7 +1,7 @@
 {
   "name": "@aifinpay/agent",
-  "version": "0.2.0-alpha.2",
-  "description": "Non-custodial multi-facilitator x402 client for autonomous AI agents (AiFinPay native + Coinbase x402 detection)",
+  "version": "0.3.0-alpha.0",
+  "description": "Unified agent-economy SDK for autonomous AI agents — chain-opaque AiFinPayAgent surface (call/openSession/balance/verify) over Polygon and Solana execution environments.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -41,7 +41,8 @@
   "bugs": "https://github.com/AiFinPay/sdk/issues",
   "dependencies": {
     "bs58": "^6.0.0",
-    "tweetnacl": "^1.0.3"
+    "tweetnacl": "^1.0.3",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

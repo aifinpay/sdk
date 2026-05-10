@@ -1,26 +1,47 @@
 /**
- * AiFinPay agent SDK — non-custodial multi-facilitator x402 client.
+ * AiFinPay agent SDK — Unified Agent Economy layer for AI agents.
  *
- * Quick start:
- *   import { Agent, PayOptions } from "@aifinpay/agent";
+ * Recommended (Phase 1+): the chain-opaque AiFinPayAgent surface.
  *
- *   const agent = Agent.new();
- *   console.log("Fund this address:", agent.address);
- *   await agent.waitForFunding({ minUsdCents: 1 });
- *   const invoice = await agent.reserveSeatInvoice({ amountUsd: 1.0, asset: "USDC" });
+ *   import { AiFinPayAgent } from "@aifinpay/agent";
  *
- *   // Generic x402 — auto-detects facilitator, signs, retries
- *   const res = await agent.pay("https://aifinpay.company/api/stats");
+ *   const agent = await AiFinPayAgent.new();
+ *   const res = await agent.call({ provider: "exa", body: { query: "..." } });
  *   const data = await res.json();
  *
- *   // Pay any third-party x402 endpoint with a budget cap
- *   await agent.pay("https://api.example.com/v1/data", {
- *     method: "POST",
- *     body: JSON.stringify({ q: "hello" }),
- *     headers: { "content-type": "application/json" },
- *     options: { maxAmountUsd: 0.10 },
- *   });
+ * Legacy (still supported, but @deprecated for new code): the chain-aware
+ * Agent class with explicit Solana primitives.
+ *
+ *   import { Agent } from "@aifinpay/agent";
+ *
+ *   const agent = Agent.new();
+ *   await agent.reserveSeatInvoice({ amountUsd: 1.0, asset: "USDC" });
+ *   const res = await agent.pay("https://aifinpay.company/api/stats");
  */
+
+// ── Unified surface (Phase 1+) ───────────────────────────────────────────
+export { AiFinPayAgent } from "./unifiedAgent.js";
+export type {
+  AiFinPayAgentOptions,
+  CallOptions,
+  ChainId,
+  ProviderEntry,
+  BalanceSnapshot,
+  ReputationSnapshot,
+  BudgetCaps,
+  SessionHandle,
+  SessionReceipt,
+} from "./unifiedAgent.js";
+export {
+  ProviderUnknownError,
+  WrongChainBalanceError,
+  InsufficientFundsError,
+  BudgetCapExceededError,
+  SettlementError,
+  SessionExpiredError,
+} from "./unifiedAgent.js";
+
+// ── Legacy chain-aware surface (kept for back-compat) ───────────────────
 export { Agent } from "./agent.js";
 export type { AgentOptions, Invoice, PayInit } from "./agent.js";
 export {

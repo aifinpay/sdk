@@ -183,6 +183,11 @@ export class Agent {
 
   // ── Invoices ──────────────────────────────────────────────────────────
 
+  /**
+   * @deprecated since 0.3.0 — use `AiFinPayAgent.deposit(usd, { asset })`
+   * instead. The unified surface picks the chain and asset for you.
+   * Kept for back-compat; will not be removed before 1.0.0.
+   */
   async reserveSeatInvoice({
     amountUsd,
     asset = "USDC",
@@ -216,6 +221,10 @@ export class Agent {
    *
    * Returns merchant amount, treasury fee, IP creator fee, and total —
    * so the agent can decide whether to pay BEFORE building the tx.
+   *
+   * @deprecated since 0.3.0 — pricing is exposed through the provider
+   * registry consumed by `AiFinPayAgent.call()`. Direct on-chain quote
+   * is rarely needed anymore. Kept for back-compat through 1.0.0.
    */
   async quoteSplit(args: {
     chain: "solana" | "polygon";
@@ -237,6 +246,10 @@ export class Agent {
   }
 
   /**
+   * @deprecated since 0.3.0 — use `AiFinPayAgent.call({ provider })`,
+   * which selects the chain, builds the tx, and submits it for you.
+   * Kept for back-compat through 1.0.0.
+   *
    * Get the on-chain instructions for a fee-on-top split payment.
    *
    * The merchant receives `merchantAmount` units (lamports for Solana,

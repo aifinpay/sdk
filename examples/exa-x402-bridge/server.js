@@ -188,6 +188,9 @@ async function verifyTx(txHash, expectedOrderId) {
 }
 
 const app = express();
+// Trust the immediate proxy (nginx / Cloudflare) so X-Forwarded-For is honoured
+// by express-rate-limit and req.ip resolves to the real client IP.
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "256kb" }));
 
 // Anti-spam on the unauthenticated 402 challenge — defeats agents that

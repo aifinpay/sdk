@@ -57,6 +57,21 @@ const BRIDGE_MERCHANT_WALLET = process.env.BRIDGE_MERCHANT_WALLET || "";
 const PRICE_WEI              = process.env.PRICE_WEI              || "15000000000000000";
 const ORDER_TTL_MS           = 10 * 60_000;
 
+// Optional: report failures + settlements to operator for the internal admin
+// dashboard. Set to e.g. https://aifinpay.company in prod.
+const OPERATOR_URL           = process.env.OPERATOR_URL || "";
+
+async function reportToOperator(kind, fields) {
+  if (!OPERATOR_URL) return;
+  try {
+    await fetch(`${OPERATOR_URL.replace(/\/$/, "")}/api/internal/bridge-event`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ service: SERVICE_NAME, kind, ts: Math.floor(Date.now() / 1000), ...fields }),
+    });
+  } catch { /* best-effort, never block the main flow */ }
+}
+
 if (!EXA_API_KEY) {
   console.warn(`[${SERVICE_NAME}] WARNING: EXA_API_KEY not set — upstream calls will 401.`);
 }
@@ -226,6 +241,11 @@ app.post("/search", challengeLimiter, async (req, res) => {
 
   const verified = await verifyTx(txHash, orderId);
   if (!verified.ok) {
+    reportToOperator("verify_failed", {
+      reason:   verified.reason,
+      tx_hash:  txHash,
+      order_id: orderId,
+    });
     return res.status(402).json({
       error: "payment_verification_failed",
       detail: verified.reason,
@@ -255,6 +275,11 @@ app.post("/search", challengeLimiter, async (req, res) => {
   if (upstreamRes.status >= 500) {
     let upstreamBody;
     try { upstreamBody = await upstreamRes.text(); } catch { upstreamBody = "<unreadable>"; }
+    reportToOperator("upstream_5xx", {
+      reason:   `upstream_status_${upstreamRes.status}`,
+      tx_hash:  txHash,
+      order_id: orderId,
+    });
     return res.status(502).json({
       error: "upstream_5xx",
       detail: `Exa returned ${upstreamRes.status}. Retry with same headers — your payment is preserved.`,
@@ -268,6 +293,12 @@ app.post("/search", challengeLimiter, async (req, res) => {
   // counts as "service rendered" for billing purposes; the agent's
   // request was malformed, not the bridge's fault.
   await Promise.all([consumeOrder(orderId), markTxConsumed(txHash)]);
+  reportToOperator("settled", {
+    tx_hash:  txHash,
+    order_id: orderId,
+    agent:    verified.payer,
+    merchant: BRIDGE_MERCHANT_WALLET,
+  });
 
   let payload;
   try {

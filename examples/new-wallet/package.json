@@ -1,0 +1,16 @@
+{
+  "name": "aifinpay-new-wallet",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-shot EVM wallet generator for autonomous AI agents on AiFinPay.",
+  "type": "module",
+  "main": "new-wallet.mjs",
+  "scripts": {
+    "start": "node new-wallet.mjs"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

@@ -170,6 +170,7 @@ function upstreamHeaders() {
 }
 
 const app = express();
+app.set("trust proxy", 1); // single nginx hop in front of the bridge
 app.use(express.json({ limit: "1mb" }));
 
 const challengeLimiter = rateLimit({
@@ -177,6 +178,7 @@ const challengeLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { xForwardedForHeader: false }, // we sit behind nginx with trust proxy=1
   message: { error: "rate_limit_exceeded" },
 });
 

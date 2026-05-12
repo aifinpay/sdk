@@ -91,6 +91,14 @@ export interface ReputationSnapshot {
 export interface BudgetCaps {
   daily_usd?:    number;
   per_call_usd?: number;
+  /**
+   * Behaviour when a cap is hit during call():
+   *   "throw"  (default) — raise BudgetCapExceededError, caller decides
+   *   "skip"            — call() resolves to null without paying;
+   *                        useful in loops where you'd rather drop an
+   *                        agent task than spike the daily envelope
+   */
+  on_limit_exceeded?: "throw" | "skip";
 }
 
 export interface SessionHandle {
@@ -349,20 +357,41 @@ export class AiFinPayAgent {
     this.budgetCaps = caps;
   }
 
-  private checkBudget(costUsd: number): void {
+  /**
+   * Internal pre-call check. Returns `false` only when on_limit_exceeded
+   * is "skip" and a cap is hit — `call()` should then resolve to null
+   * without submitting an on-chain tx. Throws BudgetCapExceededError
+   * in the default "throw" mode.
+   */
+  private checkBudget(costUsd: number): boolean {
+    const mode = this.budgetCaps.on_limit_exceeded ?? "throw";
+
     if (this.budgetCaps.per_call_usd !== undefined && costUsd > this.budgetCaps.per_call_usd) {
-      throw new BudgetCapExceededError(
+      const err = new BudgetCapExceededError(
         "per_call",
         `cost $${costUsd} exceeds per-call cap $${this.budgetCaps.per_call_usd}`,
       );
+      if (mode === "skip") return false;
+      throw err;
     }
     const after = this.spend24h.total24h() + costUsd;
     if (this.budgetCaps.daily_usd !== undefined && after > this.budgetCaps.daily_usd) {
-      throw new BudgetCapExceededError(
+      const err = new BudgetCapExceededError(
         "daily",
         `daily spend ${after.toFixed(4)} would exceed cap $${this.budgetCaps.daily_usd}`,
       );
+      if (mode === "skip") return false;
+      throw err;
     }
+    return true;
+  }
+
+  /**
+   * Current 24-hour rolling spend across all paid calls made by this
+   * agent instance. Useful for budget dashboards on the consumer side.
+   */
+  getSpend24h(): number {
+    return this.spend24h.total24h();
   }
 
   // ── Routing — chain selection ───────────────────────────────────────────
@@ -446,13 +475,18 @@ export class AiFinPayAgent {
    * Phase 1 implementation: Polygon per-call splitter via on-chain
    * `B2BSplitter.payMatic()`. Solana per-call branch lights up after
    * Phase 2 (b2b_pay_with_split deploy via Squads).
+   *
+   * Returns `null` (instead of a `Response`) iff a budget cap was hit
+   * AND budget.on_limit_exceeded is set to "skip" — the call is dropped
+   * silently. Default behaviour throws BudgetCapExceededError.
    */
-  async call(opts: CallOptions): Promise<Response> {
+  async call(opts: CallOptions): Promise<Response | null> {
     const provider = await this.resolveProvider(opts.provider);
     const chain    = this.pickChain(provider, opts);
     const cost     = opts.cost ?? provider.price_usd;
 
-    this.checkBudget(cost);
+    const withinBudget = this.checkBudget(cost);
+    if (!withinBudget) return null;
 
     if (provider.mode === "session") {
       throw new AiFinPayError(

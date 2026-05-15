@@ -57,6 +57,21 @@ const BRIDGE_MERCHANT_WALLET = process.env.BRIDGE_MERCHANT_WALLET || "";
 const PRICE_WEI              = process.env.PRICE_WEI              || "15000000000000000";
 const ORDER_TTL_MS           = 10 * 60_000;
 
+// ── Stablecoin pricing (v5.3 B2BSplitter.payStable path) ────────────────
+// USD-cent denominated price for USDC / USDT settlement. 6-decimal units
+// match the on-chain ERC-20 contract. 25_000 units = $0.025 USDC.
+const PRICE_USDC_UNITS       = process.env.PRICE_USDC_UNITS       || "25000";
+const PRICE_USDT_UNITS       = process.env.PRICE_USDT_UNITS       || "25000";
+const USDC_ADDRESS           = process.env.USDC_POLYGON           || "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
+const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
+// Standard x402 facilitator URL — Polygon's x402-rs deployment. The
+// Polygon agent-cli reads `accepts[]` from our 402 and POSTs `x-payment`
+// header to this facilitator's /verify + /settle endpoints to complete
+// the transferWithAuthorization (ERC-3009) flow without the agent
+// broadcasting a tx themselves.
+const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
+const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/exa/search";
+
 // Optional: report failures + settlements to operator for the internal admin
 // dashboard. Set to e.g. https://aifinpay.company in prod.
 const OPERATOR_URL           = process.env.OPERATOR_URL || "";
@@ -110,10 +125,55 @@ async function challenge402(res, query) {
   const ipAmt       = (totalWei * 1n)   / 10000n;
   const merchantAmt = totalWei - treasuryAmt - ipAmt;
 
+  // USDC/USDT totals — same BPS, 6-decimal units.
+  const stableTotal = (units) => {
+    const t = BigInt(units);
+    return {
+      total:         t.toString(),
+      merchant:      (t - (t * 100n) / 10000n - (t * 1n) / 10000n).toString(),
+      treasury:      ((t * 100n) / 10000n).toString(),
+      ip_creator:    ((t * 1n)   / 10000n).toString(),
+    };
+  };
+  const usdc = stableTotal(PRICE_USDC_UNITS);
+  const usdt = stableTotal(PRICE_USDT_UNITS);
+
   return res.status(402).json({
     error: "Payment Required",
     protocol: "AiFinPay v5.3",
     service: SERVICE_NAME,
+
+    // Standard x402 path (Polygon facilitator, ERC-3009 USDC/USDT)
+    x402Version: 1,
+    accepts: [
+      {
+        scheme:            "erc-3009",
+        network:           "polygon",
+        token:             USDC_ADDRESS,
+        maxAmountRequired: usdc.total,
+        resource:          X402_RESOURCE_URL,
+        description:       "Exa AI web search (1 call)",
+        mimeType:          "application/json",
+        payTo:             BRIDGE_MERCHANT_WALLET,
+        maxTimeoutSeconds: Math.floor(ORDER_TTL_MS / 1000),
+        extra:             { name: "USD Coin", version: "2", facilitator: X402_FACILITATOR_URL },
+      },
+      {
+        scheme:            "erc-3009",
+        network:           "polygon",
+        token:             USDT_ADDRESS,
+        maxAmountRequired: usdt.total,
+        resource:          X402_RESOURCE_URL,
+        description:       "Exa AI web search (1 call)",
+        mimeType:          "application/json",
+        payTo:             BRIDGE_MERCHANT_WALLET,
+        maxTimeoutSeconds: Math.floor(ORDER_TTL_MS / 1000),
+        extra:             { name: "Tether USD", version: "1", facilitator: X402_FACILITATOR_URL },
+      },
+    ],
+    error_code: "Payment Required",
+
+    // Legacy AiFinPay-pay-matic path (native POL via B2BSplitter)
     facilitator: "aifinpay-pay-matic",
     pay_matic: {
       chain:                 "polygon",
@@ -128,16 +188,35 @@ async function challenge402(res, query) {
       ttl_seconds:           Math.floor(ORDER_TTL_MS / 1000),
     },
     retry: {
-      method:    "POST",
-      headers:   ["x-tx-hash", "x-order-id"],
-      same_body: true,
+      legacy_pay_matic: { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },
+      standard_x402:    { method: "POST", headers: ["x-payment"],               same_body: true },
     },
-    instructions: [
-      `1. Call B2BSplitter.payMatic(${BRIDGE_MERCHANT_WALLET}, address(0), "${orderId}") on Polygon`,
-      `2. Send msg.value = ${totalWei} wei`,
-      `3. Resend this request with headers: x-tx-hash: <hash>, x-order-id: ${orderId}`,
-    ],
   });
+}
+
+// Submit an x402 payment payload to the Polygon facilitator's /verify and
+// /settle endpoints. Returns { ok, payer, tx } on success.
+async function verifyX402Payment(paymentHeader, paymentRequirements) {
+  const body = { x402Version: 1, paymentHeader, paymentRequirements };
+  let verifyRes;
+  try {
+    verifyRes = await fetch(`${X402_FACILITATOR_URL}/verify`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+  } catch (e) { return { ok: false, reason: `facilitator /verify unreachable: ${e.message}` }; }
+  if (!verifyRes.ok) return { ok: false, reason: `facilitator /verify ${verifyRes.status}` };
+  const verifyJson = await verifyRes.json();
+  if (!verifyJson.isValid) return { ok: false, reason: `facilitator says invalid: ${verifyJson.invalidReason || "no reason"}` };
+  let settleRes;
+  try {
+    settleRes = await fetch(`${X402_FACILITATOR_URL}/settle`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+  } catch (e) { return { ok: false, reason: `facilitator /settle unreachable: ${e.message}` }; }
+  if (!settleRes.ok) return { ok: false, reason: `facilitator /settle ${settleRes.status}` };
+  const settleJson = await settleRes.json();
+  if (!settleJson.success) return { ok: false, reason: `facilitator /settle failed: ${settleJson.error || "no error"}` };
+  return { ok: true, payer: settleJson.payer || null, tx: settleJson.transaction || null };
 }
 
 async function verifyTx(txHash, expectedOrderId) {

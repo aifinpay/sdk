@@ -1,7 +1,7 @@
 {
   "name": "@aifinpay/mcp",
   "version": "0.1.0-alpha.2",
-  "description": "MCP server exposing AiFinPay's autonomous x402 payment loop as agent tools",
+  "description": "Pay-per-call MCP server for autonomous AI agents — installs in Claude Desktop / Cursor / Continue with one config block; on-chain settlement on Polygon and Solana via x402.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,13 +26,26 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "x402",
-    "ai-agent",
     "mcp",
     "model-context-protocol",
+    "mcp-server",
+    "claude-desktop",
+    "claude-mcp",
+    "cursor",
+    "windsurf",
+    "ai-agent",
+    "ai-agents",
+    "agentic-ai",
+    "autonomous-agents",
+    "agent-payments",
+    "agent-commerce",
+    "x402",
     "payments",
+    "crypto-payments",
+    "polygon",
+    "solana",
     "non-custodial",
-    "autonomous"
+    "stripe-for-ai-agents"
   ],
   "author": "CoinSecurities (SECCO) <contact@aifinpay.company>",
   "license": "MIT",

@@ -12,7 +12,15 @@ license = { text = "MIT" }
 authors = [
   { name = "CoinSecurities (SECCO)", email = "contact@aifinpay.company" },
 ]
-keywords = ["x402", "ai-agent", "solana", "polygon", "payments", "non-custodial", "ed25519"]
+keywords = [
+  "ai-agent", "ai-agents", "agentic-ai", "autonomous-agents",
+  "agent-payments", "agent-commerce",
+  "x402", "mcp", "model-context-protocol",
+  "payments", "crypto-payments",
+  "polygon", "solana", "stablecoin", "usdc",
+  "non-custodial", "ed25519",
+  "stripe-for-ai-agents",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

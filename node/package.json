@@ -22,13 +22,24 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "x402",
     "ai-agent",
-    "solana",
-    "polygon",
+    "ai-agents",
+    "agentic-ai",
+    "autonomous-agents",
+    "agent-payments",
+    "agent-commerce",
+    "x402",
+    "mcp",
+    "model-context-protocol",
     "payments",
+    "crypto-payments",
+    "polygon",
+    "solana",
+    "stablecoin",
+    "usdc",
     "non-custodial",
-    "ed25519"
+    "ed25519",
+    "stripe-for-ai-agents"
   ],
   "author": "CoinSecurities (SECCO) <contact@aifinpay.company>",
   "license": "MIT",

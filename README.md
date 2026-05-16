@@ -1,19 +1,59 @@
-# AiFinPay SDKs
+# AiFinPay — Payment Rail for AI Agents
 
-Public monorepo for **AiFinPay** — the autonomous payment layer for AI
-agents. Live at **[aifinpay.company](https://aifinpay.company)**.
+[![npm @aifinpay/agent](https://img.shields.io/npm/v/@aifinpay/agent?label=%40aifinpay%2Fagent&color=blue)](https://www.npmjs.com/package/@aifinpay/agent)
+[![npm @aifinpay/mcp](https://img.shields.io/npm/v/@aifinpay/mcp?label=%40aifinpay%2Fmcp&color=blue)](https://www.npmjs.com/package/@aifinpay/mcp)
+[![PyPI aifinpay-agent](https://img.shields.io/pypi/v/aifinpay-agent?color=blue)](https://pypi.org/project/aifinpay-agent/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Site](https://img.shields.io/badge/site-aifinpay.company-black.svg)](https://aifinpay.company)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
 
-This repo holds the agent-side SDKs, the MCP server, and reference
-partner integrations. The protocol backend (the live `aifinpay.company`
-service) lives in a private operator repo.
+**Stripe for autonomous AI agents.** One line of code — `agent.pay(url)` —
+and your agent settles a real on-chain payment on Polygon or Solana
+mainnet, then receives the gated response. Non-custodial. Live since
+2026. Polygon facilitator compatible.
+
+```bash
+# Python
+pip install aifinpay-agent --pre
+
+# Node / TypeScript
+npm install @aifinpay/agent@alpha
+
+# MCP server (Claude Desktop, Cursor, Windsurf, Continue)
+npx @aifinpay/mcp
+```
+
+## One-click MCP for Claude Desktop / Cursor
+
+Drop this block into your client config — `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`)
+or Cursor's `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "aifinpay": {
+      "command": "npx",
+      "args": ["@aifinpay/mcp"]
+    }
+  }
+}
+```
+
+Restart the client. Your model now has five payment tools
+(`payable_fetch`, `agent_address`, `agent_quote`, `pay_with_split`,
+`quote_split`) and can autonomously settle any x402-gated API.
+
+Full client matrix (Claude Desktop, Cursor, Windsurf, Continue, LobeChat,
+Cline) lives in [`MCP_CONFIG.md`](./MCP_CONFIG.md).
 
 ## Packages
 
 | Package | Path | Install | Latest |
 |---|---|---|---|
 | **`aifinpay-agent`** (Python) | [`./python`](./python) | `pip install aifinpay-agent --pre` | `0.2.0a2` (alpha) |
-| **`@aifinpay/agent`** (Node / TypeScript) | [`./node`](./node) | `npm install @aifinpay/agent@alpha` | `0.2.0-alpha.2` (alpha) |
-| **`@aifinpay/mcp`** (MCP server for Claude Desktop / agent runtimes) | [`./mcp`](./mcp) | `npx @aifinpay/mcp` | `0.1.0-alpha.2` (alpha) |
+| **`@aifinpay/agent`** (Node / TypeScript) | [`./node`](./node) | `npm install @aifinpay/agent@alpha` | `0.3.0-alpha.0` (alpha) |
+| **`@aifinpay/mcp`** (MCP server) | [`./mcp`](./mcp) | `npx @aifinpay/mcp` | `0.1.0-alpha.2` (alpha) |
 | Go SDK | — | `go get github.com/AiFinPay/sdk/go` | **soon** |
 | Rust SDK | — | `cargo add aifinpay-sdk` | **soon** |
 
@@ -127,6 +167,31 @@ All verified on Polygonscan.
 
 Solana program (Anchor): `5g9zWHF1Vv6GiGpA2ZbJQbSCDZd5hAk9AyvabRJvKFx2`.
 
+## Framework integrations
+
+Drop-in adapters for popular agent frameworks live under
+[`./examples/`](./examples). Each is a working, paste-and-run example.
+
+| Framework | Example | What it shows |
+|---|---|---|
+| **OpenAI Agents SDK** | [`examples/openai-agent`](./examples/openai-agent) | `Tool`-style integration: GPT-4 calls a tool that pays an x402 endpoint and returns the response |
+| **Claude (MCP)** | [`examples/claude-mcp`](./examples/claude-mcp) | Zero-code: just install the MCP server, talk to Claude |
+| **LangChain** | [`examples/langchain`](./examples/langchain) | `BaseTool` wrapping `agent.pay()` |
+| **CrewAI** | [`examples/crewai`](./examples/crewai) | A research crew that buys inference and search calls as it works |
+| **Flowise** | [`examples/flowise`](./examples/flowise) | Custom node JSON + import instructions |
+| **AutoGPT / AutoGen** | [`examples/autogpt`](./examples/autogpt) | Headless agent loop that funds itself once, then runs unattended |
+| Reference partner server | [`examples/echo-x402-server`](./examples/echo-x402-server) | ~70-line Node server that accepts AiFinPay payments |
+| Live bridges | [`examples/io-net-x402-bridge`](./examples/io-net-x402-bridge), [`exa-x402-bridge`](./examples/exa-x402-bridge), [`venice-x402-bridge`](./examples/venice-x402-bridge) | Production bridges in front of io.net / Exa / Venice |
+
+## Verified mainnet payments
+
+Two on-chain proofs that the full stack works end-to-end:
+
+| Provider | Asset | What was bought | Tx |
+|---|---|---|---|
+| Exa Search | POL | First SDK call via Exa | [`0xeb13c5ed…59c8700`](https://polygonscan.com/tx/0xeb13c5ed59c8700) |
+| io.net | POL | Llama-3.3-70B inference, $0.025 | [`0x7c6ca0ff…129f0a`](https://polygonscan.com/tx/0x7c6ca0ff129f0a) |
+
 ## Repo layout
 
 ```
@@ -134,8 +199,18 @@ sdk/
 ├── python/                  aifinpay-agent (PyPI)
 ├── node/                    @aifinpay/agent (npm)
 ├── mcp/                     @aifinpay/mcp (npm)
+├── docs/                    QUICKSTART.md, MCP_CONFIG.md, integrations
 └── examples/
-    └── echo-x402-server/    reference partner integration (~70 lines)
+    ├── openai-agent/        OpenAI Agents SDK tool
+    ├── claude-mcp/          Claude Desktop MCP config + walkthrough
+    ├── langchain/           LangChain BaseTool wrapper
+    ├── crewai/              CrewAI multi-agent crew that pays
+    ├── flowise/             Flowise custom node
+    ├── autogpt/             Headless self-funding agent loop
+    ├── echo-x402-server/    reference partner integration (~70 lines)
+    ├── io-net-x402-bridge/  live io.net bridge
+    ├── exa-x402-bridge/     live Exa bridge
+    └── venice-x402-bridge/  live Venice bridge
 ```
 
 ## Releasing

@@ -20,7 +20,7 @@ import rateLimit from "express-rate-limit";
 import crypto from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { createServer } from "@aifinpay/mcp/dist/server.js";
+import { createServer } from "@aifinpay/mcp";
 
 const PORT = process.env.PORT || 3010;
 const PUBLIC_URL = process.env.MCP_PUBLIC_URL || "https://mcp.aifinpay.company/mcp";

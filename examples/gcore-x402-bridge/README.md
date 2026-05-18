@@ -47,6 +47,10 @@ The deployment's URL looks like:
 
 ### Setup
 
+The bridge has two modes — pick one:
+
+**Single-model.** One deployment, fixed price for every call:
+
 ```bash
 npm install
 cp .env.example .env
@@ -55,6 +59,20 @@ cp .env.example .env
 #   GCORE_API_KEY=<your Gcore API token>
 #   BRIDGE_MERCHANT_WALLET=0x<your Polygon address>
 ```
+
+**Multi-model (recommended).** Operator pre-provisions N deployments
+(one per model), agent picks via the OpenAI `model` field in body, the
+bridge routes + prices per-deployment:
+
+```bash
+# In .env:
+#   GCORE_API_URL=          # leave blank
+#   GCORE_DEPLOYMENTS=[{"model":"meta-llama/Llama-3.3-70B-Instruct","url":"https://...gcore.cloud/v1/chat/completions","price_wei":"250000000000000000","price_usdc_units":"25000"},{"model":"meta-llama/Llama-3.1-8B-Instruct","url":"https://...gcore.cloud/v1/chat/completions","price_wei":"100000000000000000","price_usdc_units":"10000"}]
+```
+
+In multi-model mode, requests with a `model` not in the config get 404
+with the list of `available_models`. `GET /models` returns an
+OpenAI-style catalog. `GET /` shows the bridge's current routing table.
 
 ### Run
 

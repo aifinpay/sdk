@@ -38,11 +38,46 @@ import {
 
 const PORT                   = process.env.PORT                   || 3004;
 const SERVICE_NAME           = process.env.SERVICE_NAME           || "gcore-x402-bridge";
-// Operator pre-provisions a Gcore Everywhere Inference deployment (e.g.
-// Llama-3.3-70B) and pastes its `endpoint_url` here, with the OpenAI-
-// compatible /v1/chat/completions path appended.
-// Example: https://<deploy>.inference.<region>.gcore.cloud/v1/chat/completions
+// Operator pre-provisions one or more Gcore Everywhere Inference deployments,
+// one per model exposed. Two ways to configure:
+//
+//   1. Multi-model (recommended). Set GCORE_DEPLOYMENTS to a JSON array:
+//      [
+//        { "model": "meta-llama/Llama-3.3-70B-Instruct",
+//          "url":   "https://...inference.<region>.gcore.cloud/v1/chat/completions",
+//          "price_wei": "250000000000000000",     // 0.25 POL ≈ $0.025
+//          "price_usdc_units": "25000" },          // 6-decimal USDC unit
+//        { "model": "meta-llama/Llama-3.1-8B-Instruct",
+//          "url":   "https://...inference.<region>.gcore.cloud/v1/chat/completions",
+//          "price_wei": "100000000000000000",     // 0.1 POL ≈ $0.01
+//          "price_usdc_units": "10000" }
+//      ]
+//      The bridge inspects the agent's request body for `model` and routes
+//      to the matching deployment. 402 challenge price comes from the
+//      matched entry.
+//
+//   2. Single-model (legacy). Set GCORE_API_URL to one endpoint URL; PRICE_WEI
+//      + PRICE_USDC_UNITS apply to every request. Any `model` field in body
+//      is forwarded as-is.
 const GCORE_API_URL          = process.env.GCORE_API_URL          || "";
+const GCORE_DEPLOYMENTS_RAW  = process.env.GCORE_DEPLOYMENTS      || "";
+let GCORE_DEPLOYMENTS = [];
+if (GCORE_DEPLOYMENTS_RAW) {
+  try {
+    GCORE_DEPLOYMENTS = JSON.parse(GCORE_DEPLOYMENTS_RAW);
+    if (!Array.isArray(GCORE_DEPLOYMENTS)) throw new Error("must be array");
+  } catch (e) {
+    console.error(`[gcore-x402-bridge] FATAL: GCORE_DEPLOYMENTS is not valid JSON: ${e.message}`);
+    process.exit(1);
+  }
+}
+function deploymentFor(model) {
+  if (!model) return null;
+  return GCORE_DEPLOYMENTS.find((d) => d.model === model) || null;
+}
+function listAvailableModels() {
+  return GCORE_DEPLOYMENTS.map((d) => d.model);
+}
 const GCORE_API_KEY          = process.env.GCORE_API_KEY          || "";
 // Gcore convention: `Authorization: APIKey <token>`. Override to "bearer" or
 // "x-api-key" if your deployment exposes an OpenAI-style endpoint with a
@@ -73,8 +108,8 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
 const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/gcore/chat/completions";
 
-if (!GCORE_API_URL) {
-  console.error(`[${SERVICE_NAME}] FATAL: GCORE_API_URL not set. Provision an Inference deployment in Gcore Cloud and paste its endpoint URL (with /v1/chat/completions appended).`);
+if (!GCORE_API_URL && GCORE_DEPLOYMENTS.length === 0) {
+  console.error(`[${SERVICE_NAME}] FATAL: configure at least one upstream. Set GCORE_API_URL (single-model) or GCORE_DEPLOYMENTS (multi-model JSON array).`);
   process.exit(1);
 }
 if (!GCORE_API_KEY) {
@@ -106,10 +141,15 @@ function issueOrderId() {
   return `gcore-${crypto.randomUUID().slice(0, 18)}`;
 }
 
-async function challenge402(res) {
+async function challenge402(res, priceOverride) {
   const orderId = issueOrderId();
   await putOrder(orderId, "");
-  const totalWei = BigInt(PRICE_WEI);
+  const wei  = priceOverride?.wei  || PRICE_WEI;
+  const usdcUnits = priceOverride?.usdc_units || PRICE_USDC_UNITS;
+  const usdtUnits = priceOverride?.usdt_units || PRICE_USDT_UNITS;
+  const description = priceOverride?.description || "Gcore Everywhere Inference (1 call)";
+
+  const totalWei = BigInt(wei);
   const treasuryAmt = (totalWei * 100n) / 10000n;
   const ipAmt       = (totalWei * 1n)   / 10000n;
   const merchantAmt = totalWei - treasuryAmt - ipAmt;
@@ -124,8 +164,8 @@ async function challenge402(res) {
       ip_creator:    ((t * 1n)   / 10000n).toString(),
     };
   };
-  const usdc = stableTotal(PRICE_USDC_UNITS);
-  const usdt = stableTotal(PRICE_USDT_UNITS);
+  const usdc = stableTotal(usdcUnits);
+  const usdt = stableTotal(usdtUnits);
 
   return res.status(402).json({
     error: "Payment Required",
@@ -144,7 +184,7 @@ async function challenge402(res) {
         token:             USDC_ADDRESS,
         maxAmountRequired: usdc.total,
         resource:          X402_RESOURCE_URL,
-        description:       "Gcore Llama-3.3-70B inference (1 call)",
+        description:       description,
         mimeType:          "application/json",
         payTo:             BRIDGE_MERCHANT_WALLET,
         maxTimeoutSeconds: Math.floor(ORDER_TTL_MS / 1000),
@@ -156,7 +196,7 @@ async function challenge402(res) {
         token:             USDT_ADDRESS,
         maxAmountRequired: usdt.total,
         resource:          X402_RESOURCE_URL,
-        description:       "Gcore Llama-3.3-70B inference (1 call)",
+        description:       description,
         mimeType:          "application/json",
         payTo:             BRIDGE_MERCHANT_WALLET,
         maxTimeoutSeconds: Math.floor(ORDER_TTL_MS / 1000),
@@ -319,8 +359,33 @@ const challengeLimiter = rateLimit({
 app.get("/", (_req, res) => res.json({
   service: SERVICE_NAME,
   description: "AiFinPay-gated proxy in front of Gcore Everywhere Inference (managed LLM inference)",
-  upstream: GCORE_API_URL,
-  pricing: { total_wei: PRICE_WEI, split: "98.99% merchant / 1.00% treasury / 0.01% creator" },
+  mode: GCORE_DEPLOYMENTS.length > 0 ? "multi-model" : "single-model",
+  models: GCORE_DEPLOYMENTS.length > 0
+    ? GCORE_DEPLOYMENTS.map((d) => ({
+        model: d.model,
+        price_wei: d.price_wei || PRICE_WEI,
+        price_usdc_units: d.price_usdc_units || PRICE_USDC_UNITS,
+      }))
+    : null,
+  upstream: GCORE_API_URL || undefined,
+  pricing: GCORE_DEPLOYMENTS.length === 0
+    ? { total_wei: PRICE_WEI, split: "98.99% merchant / 1.00% treasury / 0.01% creator" }
+    : { split: "98.99% merchant / 1.00% treasury / 0.01% creator" },
+}));
+
+// GET /models — OpenAI-compatible catalog list. Lets agents discover what
+// the bridge will route.
+app.get("/models", (_req, res) => res.json({
+  object: "list",
+  data: (GCORE_DEPLOYMENTS.length > 0
+    ? GCORE_DEPLOYMENTS.map((d) => ({
+        id: d.model,
+        object: "model",
+        owned_by: "gcore-everywhere-inference",
+        price_wei: d.price_wei || PRICE_WEI,
+        price_usdc_units: d.price_usdc_units || PRICE_USDC_UNITS,
+      }))
+    : [{ id: "default", object: "model", owned_by: "gcore-everywhere-inference" }]),
 }));
 
 app.get("/.well-known/x402.json", (_req, res) => res.json({
@@ -338,6 +403,39 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
     return res.status(400).json({ error: "messages array required (OpenAI-compatible body)" });
   }
 
+  // ── Per-request upstream + price resolution ─────────────────────────
+  // Multi-model: look up deployment by the `model` field. If the model
+  // isn't in our config, refuse with 404 + the list of available models.
+  // Single-model: forward `model` as-is to GCORE_API_URL and use the
+  // global PRICE_WEI / PRICE_USDC_UNITS.
+  let upstreamUrl, priceWei, priceUsdcUnits, priceDescription;
+  if (GCORE_DEPLOYMENTS.length > 0) {
+    const requested = req.body.model;
+    if (!requested) {
+      return res.status(400).json({
+        error: "model_field_required",
+        available_models: listAvailableModels(),
+      });
+    }
+    const dep = deploymentFor(requested);
+    if (!dep) {
+      return res.status(404).json({
+        error: "model_not_available",
+        requested,
+        available_models: listAvailableModels(),
+      });
+    }
+    upstreamUrl      = dep.url;
+    priceWei         = dep.price_wei || PRICE_WEI;
+    priceUsdcUnits   = dep.price_usdc_units || PRICE_USDC_UNITS;
+    priceDescription = `Gcore ${dep.model} inference (1 call)`;
+  } else {
+    upstreamUrl      = GCORE_API_URL;
+    priceWei         = PRICE_WEI;
+    priceUsdcUnits   = PRICE_USDC_UNITS;
+    priceDescription = "Gcore Everywhere Inference (1 call)";
+  }
+
   // ── Standard x402 path — Polygon agent-cli / x402-aware agents ──────
   // Client signs an ERC-3009 transferWithAuthorization off-chain and
   // base64-encodes it in the x-payment header. Bridge forwards to
@@ -345,17 +443,13 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
   // facilitator broadcasts the tx and returns the hash.
   const paymentHeader = req.get("x-payment");
   if (paymentHeader) {
-    // Pick one of our advertised accepts to validate against. For now we
-    // accept either USDC or USDT — facilitator decodes the header and
-    // matches asset+amount itself, so passing the USDC requirement here
-    // is fine as a template (facilitator does the right thing).
     const requirements = {
       scheme:            "erc-3009",
       network:           "polygon",
       token:             USDC_ADDRESS,
-      maxAmountRequired: PRICE_USDC_UNITS,
+      maxAmountRequired: priceUsdcUnits,
       resource:          X402_RESOURCE_URL,
-      description:       "Gcore Llama-3.3-70B inference (1 call)",
+      description:       priceDescription,
       mimeType:          "application/json",
       payTo:             BRIDGE_MERCHANT_WALLET,
       maxTimeoutSeconds: Math.floor(ORDER_TTL_MS / 1000),
@@ -365,10 +459,9 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
     if (!settled.ok) {
       return res.status(402).json({ error: "payment_verification_failed", detail: settled.reason });
     }
-    // Forward to upstream and set the standard x402 receipt header.
     let upstreamRes;
     try {
-      upstreamRes = await fetch(GCORE_API_URL, {
+      upstreamRes = await fetch(upstreamUrl, {
         method:  "POST",
         headers: upstreamHeaders(),
         body:    JSON.stringify(req.body),
@@ -390,7 +483,14 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
   const txHash  = req.get("x-tx-hash");
   const orderId = req.get("x-order-id");
 
-  if (!txHash || !orderId) return challenge402(res);
+  if (!txHash || !orderId) {
+    return challenge402(res, {
+      wei: priceWei,
+      usdc_units: priceUsdcUnits,
+      usdt_units: priceUsdcUnits, // mirror USDC default; per-model USDT optional
+      description: priceDescription,
+    });
+  }
   if (!(await hasOrder(orderId))) {
     return res.status(409).json({
       error: "unknown_or_expired_order_id",
@@ -405,7 +505,7 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
 
   let upstreamRes;
   try {
-    upstreamRes = await fetch(GCORE_API_URL, {
+    upstreamRes = await fetch(upstreamUrl, {
       method: "POST",
       headers: upstreamHeaders(),
       body: JSON.stringify(req.body),

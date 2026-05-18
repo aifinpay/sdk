@@ -1,0 +1,19 @@
+{
+  "name": "aifinpay-gcore-x402-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "x402 paid-proxy bridge for Gcore Everywhere Inference (edge-deployed LLMs, 180+ PoPs). Same Polygon flow as io-net-x402-bridge.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^5.0.0",
+    "express-rate-limit": "^7.4.0",
+    "ioredis": "^5.4.0",
+    "viem": "^2.21.0"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

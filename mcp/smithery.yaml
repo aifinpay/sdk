@@ -79,10 +79,10 @@ tools:
 
 live_evidence:
   - chain: polygon
-    use_case: Exa paid search via SDK
-    tx: "0xeb13c5ed59c8700"
-    explorer: https://polygonscan.com/tx/0xeb13c5ed59c8700
+    use_case: Exa paid search via UnifiedAgent SDK
+    tx: "0xeb13c5eddf645b3e5b5e5db82d8b19d301a4c0c8593f6e7dce9cd4c3359c8700"
+    explorer: https://polygonscan.com/tx/0xeb13c5eddf645b3e5b5e5db82d8b19d301a4c0c8593f6e7dce9cd4c3359c8700
   - chain: polygon
-    use_case: io.net Llama-3.3-70B inference, $0.025
-    tx: "0x7c6ca0ff129f0a"
-    explorer: https://polygonscan.com/tx/0x7c6ca0ff129f0a
+    use_case: io.net Llama-3.3-70B inference via SDK, $0.025
+    tx: "0x7c6ca0ffcf75b1ca3ade4800fb896c4bb08bc5f1a91916dc2cf4918f16129f0a"
+    explorer: https://polygonscan.com/tx/0x7c6ca0ffcf75b1ca3ade4800fb896c4bb08bc5f1a91916dc2cf4918f16129f0a

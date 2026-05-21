@@ -147,7 +147,7 @@ async function challenge402(res, query) {
     x402Version: 1,
     accepts: [
       {
-        scheme:            "erc-3009",
+        scheme:            "exact"        ,
         network:           "polygon",
         token:             USDC_ADDRESS,
         maxAmountRequired: usdc.total,
@@ -159,7 +159,7 @@ async function challenge402(res, query) {
         extra:             { name: "USD Coin", version: "2", facilitator: X402_FACILITATOR_URL },
       },
       {
-        scheme:            "erc-3009",
+        scheme:            "exact"        ,
         network:           "polygon",
         token:             USDT_ADDRESS,
         maxAmountRequired: usdt.total,

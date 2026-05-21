@@ -3,9 +3,11 @@
  * loop as agent-callable tools.
  *
  * Tools:
- *   - payable_fetch(url, opts?) — fetch any URL, auto-pay on 402
- *   - agent_address()           — show pubkey to fund
- *   - agent_quote(url)          — inspect 402 cost before paying
+ *   - agent_address()                    — return Solana + EVM addresses to fund
+ *   - agent_call(provider, body)         — registry-resolved paid call (Polygon settle)
+ *   - payable_fetch(url, opts?)          — raw-URL paid fetch (legacy Solana path)
+ *   - agent_quote(url)                   — inspect 402 cost before paying
+ *   - pay_with_split / quote_split       — direct B2BSplitter invoice (advanced)
  *
  * Quick start (stdio transport for Claude Desktop / MCP-aware runtimes):
  *

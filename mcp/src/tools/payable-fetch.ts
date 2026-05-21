@@ -63,7 +63,9 @@ export async function runPayableFetch(
       : ctx.config.maxAmountUsd;
 
   try {
-    const resp = await ctx.agent.pay(url, {
+    // Legacy URL-keyed path lives on the wrapped Solana-side Agent. For
+    // registry-resolved Polygon-native calls prefer the `agent_call` tool.
+    const resp = await ctx.agent.inner.pay(url, {
       method,
       body,
       headers,
@@ -100,8 +102,9 @@ export async function runPayableFetch(
     const err = e as Error;
     return errorResult(
       `${err.constructor.name}: ${err.message}`,
-      `Tip: ensure agent ${ctx.agent.address} has a funded Seat PDA. ` +
-        `Read more: https://aifinpay.company/docs`,
+      `Tip: ensure agent ${ctx.agent.solanaAddress} has a funded Seat PDA, ` +
+        `or use the unified \`agent_call\` tool (Polygon settlement). ` +
+        `Docs: https://aifinpay.company/docs`,
     );
   }
 }

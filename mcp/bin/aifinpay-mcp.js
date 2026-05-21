@@ -13,6 +13,6 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createServer, loadConfigFromEnv } from "../dist/index.js";
 
-const { server } = createServer(loadConfigFromEnv());
+const { server } = await createServer(loadConfigFromEnv());
 const transport = new StdioServerTransport();
 await server.connect(transport);

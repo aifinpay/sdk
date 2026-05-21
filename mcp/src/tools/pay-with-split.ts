@@ -67,7 +67,7 @@ export async function runPayWithSplit(
       : undefined;
 
   try {
-    const invoice = await ctx.agent.payWithSplitInvoice({
+    const invoice = await ctx.agent.inner.payWithSplitInvoice({
       chain,
       merchantWallet,
       merchantAmount,
@@ -118,7 +118,7 @@ export async function runQuoteSplit(
   if (!merchantAmount) return errorResult("merchant_amount required");
 
   try {
-    const quote = await ctx.agent.quoteSplit({ chain, merchantAmount });
+    const quote = await ctx.agent.inner.quoteSplit({ chain, merchantAmount });
     return {
       content: [{ type: "text", text: JSON.stringify(quote, null, 2) }],
     };

@@ -31,7 +31,7 @@ export async function runAgentQuote(
   if (!url) return errorResult("missing required arg: url");
   const method = String(args.method ?? "GET").toUpperCase();
 
-  const resp = await ctx.agent.fetchImpl(url, { method });
+  const resp = await ctx.agent.inner.fetchImpl(url, { method });
   if (resp.status !== 402) {
     return {
       content: [

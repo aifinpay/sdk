@@ -1,4 +1,4 @@
-import { Agent } from "@aifinpay/agent";
+import { AiFinPayAgent, Agent } from "@aifinpay/agent";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import {
   CallToolRequestSchema,
@@ -8,6 +8,7 @@ import type { McpConfig } from "./config.js";
 import { payableFetchTool, runPayableFetch } from "./tools/payable-fetch.js";
 import { agentAddressTool, runAgentAddress } from "./tools/agent-address.js";
 import { agentQuoteTool, runAgentQuote } from "./tools/agent-quote.js";
+import { agentCallTool, runAgentCall } from "./tools/agent-call.js";
 import {
   payWithSplitTool,
   runPayWithSplit,
@@ -20,38 +21,44 @@ import {
  *
  * Returned server is unstarted — caller wires up a transport (stdio, SSE,
  * etc.) via the official `@modelcontextprotocol/sdk` package.
+ *
+ * As of 0.1.0-alpha.3 the wrapped identity is `AiFinPayAgent` — dual-chain
+ * (Solana base58 pubkey AND Polygon EVM address from one secret). Tools
+ * that previously called legacy `Agent` methods now reach them via
+ * `agent.inner.*`.
  */
-export function createServer(config: McpConfig = {}) {
+export async function createServer(config: McpConfig = {}) {
   const log = config.logFn ?? defaultLog;
 
   // Agent identity: load from env secret if provided, else generate one
   // and print to stderr so the human knows what to fund.
   const agent = config.agentSecretB58
-    ? Agent.fromSecretB58(config.agentSecretB58, {
-        baseUrl: config.baseUrl,
+    ? await AiFinPayAgent.fromSolanaSecret(config.agentSecretB58, {
+        baseUrl:   config.baseUrl,
         timeoutMs: config.timeoutMs,
       })
-    : (() => {
-        const a = Agent.new({
-          baseUrl: config.baseUrl,
+    : await (async () => {
+        const a = await AiFinPayAgent.new({
+          baseUrl:   config.baseUrl,
           timeoutMs: config.timeoutMs,
         });
         log(
           "warn",
           `[aifinpay-mcp] no AIFINPAY_AGENT_SECRET set — generated EPHEMERAL agent.\n` +
-            `  address: ${a.address}\n` +
-            `  secret:  ${a.secretB58}\n` +
-            `  >> Save this secret to AIFINPAY_AGENT_SECRET to keep the agent across restarts.`,
+            `  solana_address: ${a.solanaAddress}\n` +
+            `  evm_address:    ${a.evmAddress}\n` +
+            `  solana_secret:  ${a.inner.secretB58}\n` +
+            `  >> Save the secret to AIFINPAY_AGENT_SECRET to keep the agent across restarts.`,
         );
         return a;
       })();
 
-  log("info", `[aifinpay-mcp] agent address: ${agent.address}`);
+  log("info", `[aifinpay-mcp] solana: ${agent.solanaAddress} · evm: ${agent.evmAddress}`);
 
   const server = new Server(
     {
       name: "@aifinpay/mcp",
-      version: "0.1.0-alpha.2",
+      version: "0.1.0-alpha.3",
     },
     {
       capabilities: {
@@ -63,8 +70,9 @@ export function createServer(config: McpConfig = {}) {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [
-        payableFetchTool(),
         agentAddressTool(),
+        agentCallTool(),
+        payableFetchTool(),
         agentQuoteTool(),
         payWithSplitTool(),
         quoteSplitTool(),
@@ -76,10 +84,12 @@ export function createServer(config: McpConfig = {}) {
     const { name, arguments: args } = request.params;
     const ctx = { agent, config, log };
     switch (name) {
-      case "payable_fetch":
-        return runPayableFetch(ctx, args ?? {});
       case "agent_address":
         return runAgentAddress(ctx, args ?? {});
+      case "agent_call":
+        return runAgentCall(ctx, args ?? {});
+      case "payable_fetch":
+        return runPayableFetch(ctx, args ?? {});
       case "agent_quote":
         return runAgentQuote(ctx, args ?? {});
       case "pay_with_split":
@@ -100,7 +110,7 @@ export function createServer(config: McpConfig = {}) {
 }
 
 export interface ToolContext {
-  agent: Agent;
+  agent: AiFinPayAgent;
   config: McpConfig;
   log: (level: "info" | "warn" | "error", msg: string) => void;
 }

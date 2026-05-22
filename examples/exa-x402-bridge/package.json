@@ -11,6 +11,7 @@
     "gen:wallet": "node gen-test-wallet.js"
   },
   "dependencies": {
+    "@solana/web3.js": "^1.95.0",
     "express": "^5.0.0",
     "express-rate-limit": "^7.4.0",
     "ioredis": "^5.4.0",

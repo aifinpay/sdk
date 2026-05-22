@@ -197,26 +197,29 @@ async function challenge402(res, query) {
       ttl_seconds:           Math.floor(ORDER_TTL_MS / 1000),
     },
 
-    // Solana b2b_pay_with_split (advertised only if operator opts in)
-    ...(BRIDGE_MERCHANT_SOLANA ? {
-      pay_solana: {
-        chain:                       "solana",
-        program_id:                  SOLANA_PROGRAM_ID,
-        instruction:                 "b2b_pay_with_split",
-        merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
-        treasury:                    SOLANA_TREASURY,
-        merchant_amount_lamports:    (() => {
-          const t = BigInt(PRICE_LAMPORTS);
-          return (t - (t * 100n) / 10000n - (t * 1n) / 10000n).toString();
-        })(),
-        treasury_amount_lamports:    ((BigInt(PRICE_LAMPORTS) * 100n) / 10000n).toString(),
-        ip_creator_amount_lamports:  ((BigInt(PRICE_LAMPORTS) * 1n) / 10000n).toString(),
-        total_lamports:              BigInt(PRICE_LAMPORTS).toString(),
-        order_id:                    orderId,
-        asset:                       "SOL",
-        ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
-      },
-    } : {}),
+    // Solana b2b_pay_with_split — fee-on-top, contract adds 1%+0.01% on top
+    ...(BRIDGE_MERCHANT_SOLANA ? (() => {
+      const baseMerchant = BigInt(PRICE_LAMPORTS);
+      const treasuryFee  = (baseMerchant * 100n) / 10000n;
+      const ipFee        = (baseMerchant * 1n)   / 10000n;
+      const total        = baseMerchant + treasuryFee + ipFee;
+      return {
+        pay_solana: {
+          chain:                       "solana",
+          program_id:                  SOLANA_PROGRAM_ID,
+          instruction:                 "b2b_pay_with_split",
+          merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
+          treasury:                    SOLANA_TREASURY,
+          merchant_amount_lamports:    baseMerchant.toString(),
+          treasury_amount_lamports:    treasuryFee.toString(),
+          ip_creator_amount_lamports:  ipFee.toString(),
+          total_lamports:              total.toString(),
+          order_id:                    orderId,
+          asset:                       "SOL",
+          ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
+        },
+      };
+    })() : {}),
 
     retry: {
       legacy_pay_matic:    { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },

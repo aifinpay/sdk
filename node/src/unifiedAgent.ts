@@ -11,6 +11,7 @@
 // ──────────────────────────────────────────────────────────────────────────
 import nacl from "tweetnacl";
 import bs58 from "bs58";
+import { createHash } from "node:crypto";
 import {
   createPublicClient,
   createWalletClient,
@@ -24,6 +25,15 @@ import {
   type PrivateKeyAccount,
 } from "viem/accounts";
 import { polygon } from "viem/chains";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import {
   AiFinPayError,
   X402Error,
@@ -137,7 +147,7 @@ interface PayMaticChallenge {
   protocol: string;
   service:  string;
   facilitator?: string;
-  pay_matic: {
+  pay_matic?: {
     chain:                 "polygon";
     splitter:              string;
     merchant_wallet:       string;
@@ -148,6 +158,20 @@ interface PayMaticChallenge {
     order_id:              string;
     function_signature?:   string;
     ttl_seconds?:          number;
+  };
+  pay_solana?: {
+    chain:                       "solana";
+    program_id:                  string;
+    instruction:                 string;     // expected "b2b_pay_with_split"
+    merchant_wallet:             string;     // base58
+    treasury:                    string;     // base58
+    merchant_amount_lamports:    string;
+    treasury_amount_lamports?:   string;
+    ip_creator_amount_lamports?: string;
+    total_lamports?:             string;
+    order_id:                    string;
+    asset?:                      string;
+    ttl_seconds?:                number;
   };
   retry?: unknown;
   instructions?: string[];
@@ -222,6 +246,7 @@ export class AiFinPayAgent {
   readonly evmAccount:   PrivateKeyAccount;
   readonly registryUrl:  string;
   readonly polygonRpc:   string;
+  readonly solanaRpc:    string;
   private  cachedRegistry?: ProviderEntry[];
   private  budgetCaps:     BudgetCaps;
   private  spend24h        = new SpendTracker();
@@ -241,6 +266,9 @@ export class AiFinPayAgent {
     this.budgetCaps  = opts.budgetCaps ?? {};
     this.telemetry   = opts.telemetry !== false;
     this.polygonRpc  = opts.polygonRpc ?? "https://polygon.drpc.org";
+    this.solanaRpc   = (opts as { solanaRpc?: string }).solanaRpc
+      ?? process.env.AIFINPAY_SOLANA_RPC
+      ?? "https://api.mainnet-beta.solana.com";
   }
 
   // Lazy viem clients — only spun up when a Polygon flow runs.
@@ -499,13 +527,6 @@ export class AiFinPayAgent {
       throw new AiFinPayError(`Provider ${provider.name} has no bridge_url`);
     }
 
-    if (chain === "solana") {
-      throw new AiFinPayError(
-        `Solana per-call payment requires b2b_pay_with_split (phase-2). ` +
-          `Use chain: "polygon" override or wait for the Solana program upgrade.`,
-      );
-    }
-
     const path = (() => {
       if (provider.service_type === "search")    return "/search";
       if (provider.service_type === "inference") return "/chat/completions";
@@ -538,6 +559,34 @@ export class AiFinPayAgent {
     } catch (e) {
       throw new X402Error(`bridge returned 402 with non-JSON body`);
     }
+
+    // ── Solana branch (b2b_pay_with_split atomic split, live 2026-05-18) ──
+    if (chain === "solana") {
+      if (!challenge.pay_solana) {
+        throw new X402Error(
+          `Bridge ${provider.name} returned 402 without a pay_solana block. ` +
+            `Either pick chain: "polygon" or ask the operator to set ` +
+            `BRIDGE_MERCHANT_SOLANA on the bridge service.`,
+        );
+      }
+      const ps = challenge.pay_solana;
+      const solTxSig = await this.submitSolanaB2BPayWithSplit(ps);
+      const paidResp = await this.inner.fetchImpl(fullUrl, buildInit({
+        "x-solana-tx": solTxSig,
+        "x-order-id":  ps.order_id,
+      }));
+      if (!paidResp.ok) {
+        const detail = await paidResp.text().catch(() => "<unreadable>");
+        throw new AiFinPayError(
+          `Bridge retry failed ${paidResp.status} after Solana payment ${solTxSig}: ${detail.slice(0, 300)}`,
+        );
+      }
+      this.spend24h.add(cost);
+      if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, tx: solTxSig });
+      return paidResp;
+    }
+
+    // ── Polygon branch (B2BSplitter.payMatic atomic split, legacy default) ──
     if (!challenge.pay_matic) {
       throw new X402Error(
         `bridge ${provider.name} returned 402 but no pay_matic block — only legacy AiFinPay/Coinbase facilitators not yet wired into AiFinPayAgent.call()`,
@@ -582,6 +631,76 @@ export class AiFinPayAgent {
     this.spend24h.add(cost);
     if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, tx: txHash });
     return paidResp;
+  }
+
+  // ── Solana b2b_pay_with_split — build, sign, send via @solana/web3.js ───
+  //
+  // Manual instruction encoding (no Anchor dep):
+  //   discriminator = sha256("global:b2b_pay_with_split")[:8]
+  //   args (Borsh)   = u64 merchant_amount_lamports + string order_id
+  //   accounts       = [config_pda, vault_pda, agent (signer), treasury,
+  //                     ip_creator, merchant_wallet, system_program]
+  // PDAs derived from program_id with seeds ["config"] and ["vault"].
+  private async submitSolanaB2BPayWithSplit(ps: NonNullable<PayMaticChallenge["pay_solana"]>): Promise<string> {
+    const conn = new Connection(this.solanaRpc, "confirmed");
+
+    const programId = new PublicKey(ps.program_id);
+    const merchant  = new PublicKey(ps.merchant_wallet);
+    const treasury  = new PublicKey(ps.treasury);
+    // ip_creator slot: not surfaced by current bridge 402s; route through
+    // treasury so the on-chain 1bp still settles atomically (treasury earns
+    // both 100bp + 1bp). When bridges add per-merchant ip_creator support,
+    // accept it from `ps` and pass through.
+    const ipCreator = treasury;
+
+    // Solana keypair from legacy Agent inner (tweetnacl 64-byte secret).
+    const kp = Keypair.fromSecretKey(this.inner.secretKey);
+    if (kp.publicKey.toString() !== this.inner.address) {
+      throw new AiFinPayError(
+        `Internal: Solana keypair pubkey ${kp.publicKey.toString()} does not match agent address ${this.inner.address}`,
+      );
+    }
+
+    // PDAs
+    const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], programId);
+    const [vaultPda]  = PublicKey.findProgramAddressSync([Buffer.from("vault")],  programId);
+
+    // Instruction discriminator: Anchor convention sha256("global:<fn_name>")[:8].
+    const disc = createHash("sha256").update("global:b2b_pay_with_split").digest().subarray(0, 8);
+
+    // Borsh args: merchant_amount_lamports (u64 LE) + order_id (string = u32 len + utf8)
+    const merchantAmount = BigInt(ps.merchant_amount_lamports);
+    const amountBuf = Buffer.alloc(8);
+    amountBuf.writeBigUInt64LE(merchantAmount);
+    const orderBytes = Buffer.from(ps.order_id, "utf8");
+    if (orderBytes.length > 64) {
+      throw new AiFinPayError(`order_id too long (${orderBytes.length} bytes > 64 limit)`);
+    }
+    const orderLenBuf = Buffer.alloc(4);
+    orderLenBuf.writeUInt32LE(orderBytes.length);
+    const data = Buffer.concat([disc, amountBuf, orderLenBuf, orderBytes]);
+
+    const ix = new TransactionInstruction({
+      programId,
+      keys: [
+        { pubkey: configPda,             isSigner: false, isWritable: false },
+        { pubkey: vaultPda,              isSigner: false, isWritable: false },
+        { pubkey: kp.publicKey,          isSigner: true,  isWritable: true  },
+        { pubkey: treasury,              isSigner: false, isWritable: true  },
+        { pubkey: ipCreator,             isSigner: false, isWritable: true  },
+        { pubkey: merchant,              isSigner: false, isWritable: true  },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data,
+    });
+
+    const tx = new Transaction().add(ix);
+    // sendAndConfirmTransaction sets recentBlockhash + feePayer + signs.
+    const sig = await sendAndConfirmTransaction(conn, tx, [kp], {
+      commitment: "confirmed",
+      preflightCommitment: "confirmed",
+    });
+    return sig;
   }
 
   // ── Sessions ────────────────────────────────────────────────────────────

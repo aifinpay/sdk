@@ -186,28 +186,35 @@ async function challenge402(res) {
     },
 
     // ── Solana b2b_pay_with_split path (advertised only if operator opts in) ─
-    // Same 9899/100/1 bps split as Polygon. Agent builds + signs +
-    // broadcasts via @solana/web3.js, then resends with x-solana-tx +
-    // x-order-id. Bridge verifies the tx on-chain.
-    ...(BRIDGE_MERCHANT_SOLANA ? {
-      pay_solana: {
-        chain:                       "solana",
-        program_id:                  SOLANA_PROGRAM_ID,
-        instruction:                 "b2b_pay_with_split",
-        merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
-        treasury:                    SOLANA_TREASURY,
-        merchant_amount_lamports:    (() => {
-          const t = BigInt(PRICE_LAMPORTS);
-          return (t - (t * 100n) / 10000n - (t * 1n) / 10000n).toString();
-        })(),
-        treasury_amount_lamports:    ((BigInt(PRICE_LAMPORTS) * 100n) / 10000n).toString(),
-        ip_creator_amount_lamports:  ((BigInt(PRICE_LAMPORTS) * 1n) / 10000n).toString(),
-        total_lamports:              BigInt(PRICE_LAMPORTS).toString(),
-        order_id:                    orderId,
-        asset:                       "SOL",
-        ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
-      },
-    } : {}),
+    // FEE-ON-TOP semantics — same as Polygon B2BSplitter:
+    //   PRICE_LAMPORTS = base merchant amount (what the bridge merchant earns)
+    //   contract adds: +1% treasury + 0.01% ip_creator on top
+    //   agent pays = merchant + treasury_fee + ip_creator_fee
+    ...(BRIDGE_MERCHANT_SOLANA ? (() => {
+      const baseMerchant = BigInt(PRICE_LAMPORTS);
+      const treasuryFee  = (baseMerchant * 100n) / 10000n;
+      const ipFee        = (baseMerchant * 1n)   / 10000n;
+      const total        = baseMerchant + treasuryFee + ipFee;
+      return {
+        pay_solana: {
+          chain:                       "solana",
+          program_id:                  SOLANA_PROGRAM_ID,
+          instruction:                 "b2b_pay_with_split",
+          merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
+          treasury:                    SOLANA_TREASURY,
+          // Argument passed to the contract — base merchant amount only.
+          // Contract derives the treasury + ip_creator fees from this.
+          merchant_amount_lamports:    baseMerchant.toString(),
+          treasury_amount_lamports:    treasuryFee.toString(),
+          ip_creator_amount_lamports:  ipFee.toString(),
+          // Total = what the agent's wallet will be debited (merchant + fees).
+          total_lamports:              total.toString(),
+          order_id:                    orderId,
+          asset:                       "SOL",
+          ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
+        },
+      };
+    })() : {}),
 
     retry: {
       legacy_pay_matic:    { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },

@@ -1,6 +1,6 @@
 {
   "name": "@aifinpay/agent",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.0-alpha.2",
   "description": "Unified agent-economy SDK for autonomous AI agents \u2014 chain-opaque AiFinPayAgent surface (call/openSession/balance/verify) over Polygon and Solana execution environments.",
   "type": "module",
   "main": "dist/index.js",
@@ -51,6 +51,7 @@
   },
   "bugs": "https://github.com/AiFinPay/sdk/issues",
   "dependencies": {
+    "@solana/web3.js": "^1.95.0",
     "bs58": "^6.0.0",
     "tweetnacl": "^1.0.3",
     "viem": "^2.21.0"

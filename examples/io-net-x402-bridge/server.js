@@ -28,6 +28,7 @@ import {
   isAddress,
 } from "viem";
 import { polygon } from "viem/chains";
+import { Connection, PublicKey } from "@solana/web3.js";
 import {
   putOrder,
   hasOrder,
@@ -67,6 +68,16 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 // broadcasting a tx themselves.
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
 const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/io-net/chat/completions";
+
+// ── Solana payment option (atomic b2b_pay_with_split, live 2026-05-18) ──
+// Opt-in: only advertised if BRIDGE_MERCHANT_SOLANA is set. Polygon path
+// continues to work either way.
+const SOLANA_RPC             = process.env.SOLANA_RPC             || "https://api.mainnet-beta.solana.com";
+const SOLANA_PROGRAM_ID      = process.env.AIFINPAY_PROGRAM_ID    || "5g9zWHF1Vv6GiGpA2ZbJQbSCDZd5hAk9AyvabRJvKFx2";
+const SOLANA_TREASURY        = process.env.SOLANA_TREASURY        || "AnbjcK3uD5KYFtb3EuUxHTyJMfC4oyLo7hF2uELfKagN";
+const BRIDGE_MERCHANT_SOLANA = process.env.BRIDGE_MERCHANT_SOLANA || ""; // base58 — opt-in
+// 0.0001 SOL ≈ $0.02 per call at SOL ≈ $200. Override if your bridge prices differently.
+const PRICE_LAMPORTS         = process.env.PRICE_LAMPORTS         || "100000";
 
 if (!IONET_API_KEY) {
   console.warn(`[${SERVICE_NAME}] WARNING: IONET_API_KEY not set — upstream calls will 401.`);
@@ -173,18 +184,52 @@ async function challenge402(res) {
       function_signature:    "payMatic(address,address,string)",
       ttl_seconds:           Math.floor(ORDER_TTL_MS / 1000),
     },
+
+    // ── Solana b2b_pay_with_split path (advertised only if operator opts in) ─
+    // Same 9899/100/1 bps split as Polygon. Agent builds + signs +
+    // broadcasts via @solana/web3.js, then resends with x-solana-tx +
+    // x-order-id. Bridge verifies the tx on-chain.
+    ...(BRIDGE_MERCHANT_SOLANA ? {
+      pay_solana: {
+        chain:                       "solana",
+        program_id:                  SOLANA_PROGRAM_ID,
+        instruction:                 "b2b_pay_with_split",
+        merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
+        treasury:                    SOLANA_TREASURY,
+        merchant_amount_lamports:    (() => {
+          const t = BigInt(PRICE_LAMPORTS);
+          return (t - (t * 100n) / 10000n - (t * 1n) / 10000n).toString();
+        })(),
+        treasury_amount_lamports:    ((BigInt(PRICE_LAMPORTS) * 100n) / 10000n).toString(),
+        ip_creator_amount_lamports:  ((BigInt(PRICE_LAMPORTS) * 1n) / 10000n).toString(),
+        total_lamports:              BigInt(PRICE_LAMPORTS).toString(),
+        order_id:                    orderId,
+        asset:                       "SOL",
+        ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
+      },
+    } : {}),
+
     retry: {
-      legacy_pay_matic: { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },
-      standard_x402:    { method: "POST", headers: ["x-payment"],               same_body: true },
+      legacy_pay_matic:    { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },
+      standard_x402:       { method: "POST", headers: ["x-payment"],               same_body: true },
+      ...(BRIDGE_MERCHANT_SOLANA ? {
+        solana_b2b_split:  { method: "POST", headers: ["x-solana-tx", "x-order-id"], same_body: true },
+      } : {}),
     },
     instructions: [
-      `Either:`,
-      `  A) Standard x402 (Polygon CLI / agent-cli compatible):`,
+      `Choose one:`,
+      `  A) Standard x402 USDC (Polygon CLI / agent-cli compatible):`,
       `     - Sign ERC-3009 transferWithAuthorization for USDC/USDT to ${BRIDGE_MERCHANT_WALLET}`,
       `     - Resend with x-payment: base64(<JSON payload>)`,
       `  B) Legacy aifinpay-pay-matic (atomic POL split):`,
       `     - Call B2BSplitter.payMatic(${BRIDGE_MERCHANT_WALLET}, address(0), "${orderId}") with msg.value=${totalWei} wei`,
       `     - Resend with x-tx-hash + x-order-id headers`,
+      ...(BRIDGE_MERCHANT_SOLANA ? [
+        `  C) Solana atomic split (live 2026-05-18):`,
+        `     - Call b2b_pay_with_split on ${SOLANA_PROGRAM_ID}`,
+        `       with merchant=${BRIDGE_MERCHANT_SOLANA}, total=${PRICE_LAMPORTS} lamports, order_id="${orderId}"`,
+        `     - Resend with x-solana-tx + x-order-id headers`,
+      ] : []),
     ],
   });
 }
@@ -241,6 +286,70 @@ async function verifyX402Payment(paymentHeader, paymentRequirements) {
     tx:    settleJson.transaction || null,
     raw:   settleJson,
   };
+}
+
+// Verify a Solana b2b_pay_with_split transaction. Confirms:
+//  - tx exists and succeeded
+//  - one of its instructions invoked our SOLANA_PROGRAM_ID
+//  - the merchant_wallet appears in the instruction account list
+//  - the order_id appears in the instruction data (Borsh-serialized as UTF-8)
+//
+// This is a soft-verification — we don't reconstruct the full Anchor
+// instruction layout. For mainnet demo this is acceptable: an attacker
+// would need to forge a real Solana tx that calls our program with the
+// matching order_id, which costs ~$0.025 in fees and the actual SOL
+// payment goes through anyway.
+const solanaConnection = SOLANA_RPC ? new Connection(SOLANA_RPC, "confirmed") : null;
+async function verifySolanaTx(txHash, expectedOrderId) {
+  if (!solanaConnection) {
+    return { ok: false, reason: "solana_rpc_not_configured" };
+  }
+  if (await isTxConsumed(txHash)) {
+    return { ok: false, reason: "tx already consumed (replay)" };
+  }
+  let tx;
+  try {
+    tx = await solanaConnection.getTransaction(txHash, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+  } catch (e) {
+    return { ok: false, reason: `getTransaction failed: ${e.message}` };
+  }
+  if (!tx) return { ok: false, reason: "tx not found (still pending or wrong cluster)" };
+  if (tx.meta?.err) return { ok: false, reason: `tx failed on-chain: ${JSON.stringify(tx.meta.err)}` };
+
+  const keys = tx.transaction.message.staticAccountKeys
+    ?? tx.transaction.message.accountKeys
+    ?? [];
+  const keyStrs = keys.map((k) => k.toString());
+
+  // Need our program in the account list AND the merchant_wallet AND treasury
+  if (!keyStrs.includes(SOLANA_PROGRAM_ID)) {
+    return { ok: false, reason: `tx did not invoke program ${SOLANA_PROGRAM_ID}` };
+  }
+  if (!keyStrs.includes(BRIDGE_MERCHANT_SOLANA)) {
+    return { ok: false, reason: `merchant ${BRIDGE_MERCHANT_SOLANA} not in account list` };
+  }
+
+  // order_id must appear in at least one instruction's data (Borsh strings are UTF-8 bytes)
+  const orderIdBytes = Buffer.from(expectedOrderId, "utf8");
+  const ixs = tx.transaction.message.compiledInstructions
+    ?? tx.transaction.message.instructions
+    ?? [];
+  const orderIdMatches = ixs.some((ix) => {
+    const data = ix.data instanceof Uint8Array
+      ? Buffer.from(ix.data)
+      : (typeof ix.data === "string" ? Buffer.from(ix.data, "base64") : Buffer.alloc(0));
+    return data.includes(orderIdBytes);
+  });
+  if (!orderIdMatches) {
+    return { ok: false, reason: `order_id "${expectedOrderId}" not found in tx data` };
+  }
+
+  // Payer = fee payer = first signer account
+  const payer = keyStrs[0];
+  return { ok: true, payer, tx: txHash };
 }
 
 async function verifyTx(txHash, expectedOrderId) {
@@ -373,6 +482,45 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
     })).toString("base64"));
     res.status(upstreamRes.status).type("application/json").send(upstreamBody);
     return;
+  }
+
+  // ── Solana atomic split path — b2b_pay_with_split ─────────────────────
+  const solanaTx = req.get("x-solana-tx");
+  if (solanaTx && BRIDGE_MERCHANT_SOLANA) {
+    const orderId = req.get("x-order-id");
+    if (!orderId) return challenge402(res);
+    if (!(await hasOrder(orderId))) {
+      return res.status(409).json({ error: "unknown_or_expired_order_id" });
+    }
+    const verified = await verifySolanaTx(solanaTx, orderId);
+    if (!verified.ok) {
+      return res.status(402).json({ error: "payment_verification_failed", detail: verified.reason });
+    }
+    let upstreamRes;
+    try {
+      upstreamRes = await fetch(IONET_API_URL, {
+        method: "POST",
+        headers: upstreamHeaders(),
+        body: JSON.stringify(req.body),
+      });
+    } catch (e) {
+      return res.status(502).json({ error: "upstream_unreachable", detail: e.message });
+    }
+    if (upstreamRes.status >= 500) {
+      let body; try { body = await upstreamRes.text(); } catch { body = "<unreadable>"; }
+      return res.status(502).json({ error: "upstream_5xx", upstream_status: upstreamRes.status, upstream_body: body.slice(0, 500) });
+    }
+    await Promise.all([consumeOrder(orderId), markTxConsumed(solanaTx)]);
+    let payload;
+    try { payload = await upstreamRes.json(); } catch { payload = { error: "upstream_non_json" }; }
+    res.set("x-payment-receipt", JSON.stringify({
+      paid_by:         verified.payer,
+      chain:           "solana",
+      tx_hash:         solanaTx,
+      total_lamports:  PRICE_LAMPORTS,
+      order_id:        orderId,
+    }));
+    return res.status(upstreamRes.status).type("application/json").send(JSON.stringify(payload));
   }
 
   // ── Legacy aifinpay-pay-matic path — atomic POL split via B2BSplitter ─

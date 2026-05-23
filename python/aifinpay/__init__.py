@@ -36,9 +36,19 @@ from .facilitators import (
     PayOptions,
 )
 
-__version__ = "0.2.0a2"
+# Phase 1+ unified surface — at parity with @aifinpay/agent JS SDK.
+# Lazy import so installs without the EVM/Solana extras keep working with
+# the legacy Agent class.
+def __getattr__(name: str):
+    if name == "AiFinPayAgent":
+        from .unified_agent import AiFinPayAgent as _A
+        return _A
+    raise AttributeError(name)
+
+__version__ = "0.3.0a0"
 __all__ = [
     "Agent",
+    "AiFinPayAgent",
     "Invoice",
     "AiFinPayError",
     "FundingTimeoutError",

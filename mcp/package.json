@@ -57,7 +57,7 @@
   },
   "bugs": "https://github.com/AiFinPay/sdk/issues",
   "dependencies": {
-    "@aifinpay/agent": "^0.3.0-alpha.3",
+    "@aifinpay/agent": "^0.3.0-alpha.4",
     "@modelcontextprotocol/sdk": "^1.0.0"
   },
   "devDependencies": {

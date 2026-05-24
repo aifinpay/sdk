@@ -103,75 +103,89 @@ export async function runAgentClaimSelf(
   // Some setups split multiple cookies; grab the session one we care about.
   const cookieHeader = setCookie.split(",").map((c) => c.trim().split(";")[0]).join("; ");
 
-  // ── 2. Request a claim challenge for the EVM address ───────────────
-  const evmAddr = ctx.agent.evmAddress;
-  let challenge: { challenge_id: string; message: string };
-  try {
-    const r = await fetch(`${apiBase}/api/me/agents/challenge`, {
+  // Claim both chains (EVM + Solana). Each is its own challenge + sig.
+  // We try Polygon first because that's where live bridges settle today;
+  // Solana side is best-effort — if anything fails we still consider the
+  // overall claim successful as long as Polygon went through.
+  const evmAddr   = ctx.agent.evmAddress;
+  const solAddr   = ctx.agent.solanaAddress;
+  const innerAny  = ctx.agent.inner as unknown as { secretKey: Uint8Array };
+  const solSecret = innerAny.secretKey;  // tweetnacl 64-byte secretKey
+
+  async function claimOne(address: string, sigFn: (msg: string) => Promise<{ signature?: string; signature_base58?: string }>) {
+    // 1) challenge
+    const cr = await fetch(`${apiBase}/api/me/agents/challenge`, {
       method: "POST",
       headers: { "content-type": "application/json", cookie: cookieHeader },
-      body: JSON.stringify({ address: evmAddr }),
+      body: JSON.stringify({ address }),
     });
-    const j = (await r.json()) as { error?: string; challenge_id?: string; message?: string };
-    if (!r.ok) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `Challenge request failed (${r.status}): ${j.error || JSON.stringify(j)}` }],
-      };
+    const cj = (await cr.json()) as { error?: string; challenge_id?: string; message?: string };
+    if (!cr.ok || !cj.challenge_id || !cj.message) {
+      return { ok: false as const, reason: cj.error || `challenge HTTP ${cr.status}` };
     }
-    if (!j.challenge_id || !j.message) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `Challenge response missing challenge_id/message: ${JSON.stringify(j)}` }],
-      };
+    // 2) sign
+    let sigPayload: { signature?: string; signature_base58?: string };
+    try {
+      sigPayload = await sigFn(cj.message);
+    } catch (e) {
+      return { ok: false as const, reason: `sign: ${(e as Error).message}` };
     }
-    challenge = { challenge_id: j.challenge_id, message: j.message };
-  } catch (e) {
+    // 3) submit
+    const sr = await fetch(`${apiBase}/api/me/agents/claim`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: cookieHeader },
+      body: JSON.stringify({ challenge_id: cj.challenge_id, label, ...sigPayload }),
+    });
+    const sj = (await sr.json()) as { error?: string; reason?: string };
+    if (!sr.ok) {
+      return { ok: false as const, reason: sj.error + (sj.reason ? ` (${sj.reason})` : "") };
+    }
+    return { ok: true as const };
+  }
+
+  // ── 2. Claim Polygon EVM ───────────────────────────────────────────
+  const polRes = await claimOne(evmAddr, async (msg) => ({
+    signature: await ctx.agent.evmAccount.signMessage({ message: msg }),
+  }));
+  if (!polRes.ok) {
     return {
       isError: true,
-      content: [{ type: "text", text: `Failed to fetch challenge: ${(e as Error).message}` }],
+      content: [{ type: "text", text: `Polygon claim failed: ${polRes.reason}` }],
     };
   }
 
-  // ── 3. Sign the challenge with the agent's EVM key (EIP-191) ───────
-  let signature: string;
+  // ── 3. Claim Solana (best-effort) ──────────────────────────────────
+  let solRes: { ok: boolean; reason?: string };
   try {
-    signature = await ctx.agent.evmAccount.signMessage({ message: challenge.message });
+    const nacl = (await import("tweetnacl")).default;
+    const bs58 = (await import("bs58")).default;
+    solRes = await claimOne(solAddr, async (msg) => {
+      const sig = nacl.sign.detached(Buffer.from(msg, "utf8"), solSecret);
+      return { signature_base58: bs58.encode(sig) };
+    });
   } catch (e) {
-    return {
-      isError: true,
-      content: [{ type: "text", text: `Signing failed: ${(e as Error).message}` }],
-    };
+    solRes = { ok: false, reason: `solana_signer_unavailable: ${(e as Error).message}` };
   }
 
-  // ── 4. Submit the claim ────────────────────────────────────────────
+  // ── 4. Report ──────────────────────────────────────────────────────
   try {
-    const r = await fetch(`${apiBase}/api/me/agents/claim`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: cookieHeader },
-      body: JSON.stringify({
-        challenge_id: challenge.challenge_id,
-        signature,
-        label,
-      }),
-    });
-    const j = (await r.json()) as { error?: string };
-    if (!r.ok) {
-      return {
-        isError: true,
-        content: [{ type: "text", text: `Claim submission failed (${r.status}): ${j.error || JSON.stringify(j)}` }],
-      };
-    }
     return {
       content: [
         {
           type: "text",
           text: JSON.stringify({
             ok: true,
-            agent_address: evmAddr,
-            chain: "polygon",
+            polygon_address: evmAddr,
+            polygon_claim: "ok",
+            solana_address: solAddr,
+            solana_claim: solRes.ok ? "ok" : `skipped (${solRes.reason})`,
             label: label || null,
-            next: `Visit ${apiBase}/agents/${evmAddr} to see live activity, or ${apiBase}/me for the full watchlist.`,
+            // Live bridges (io.net, Exa, Venice) settle on Polygon — fund
+            // the Polygon address with USDC for autonomous calls today.
+            // Solana is claimed for visibility; SOL-native settlement is
+            // available on bridges that advertise pay_solana in their 402.
+            funding_recommendation: `Send USDC on Polygon to ${evmAddr} (~0.5 USDC ≈ 20 calls). Optionally fund the Solana address with SOL to use Solana-native bridges.`,
+            next: `Visit ${apiBase}/agents/${evmAddr} (Polygon view) or ${apiBase}/agents/${solAddr} (Solana view). Watchlist: ${apiBase}/me.`,
           }, null, 2),
         },
       ],

@@ -68,6 +68,39 @@ app.get("/", (_req, res) =>
   }),
 );
 
+// ── Static tool spec — for catalogs that just GET (Google Vertex MCP,
+//    Smithery preview, etc.) and can't speak Streamable HTTP handshake.
+//    Returns the live tool list from the embedded MCP server as an array
+//    of {name, description, inputSchema} — the canonical MCP Tool schema.
+let _cachedToolspec = null;
+async function buildToolspec() {
+  if (_cachedToolspec) return _cachedToolspec;
+  const { server } = await createServer({ logFn: () => {} });
+  // Pull out the registered tool handlers — the Server stores them in
+  // a private _requestHandlers map keyed by method name. Easier:
+  // invoke ListToolsRequest manually via the registered handler.
+  const { ListToolsRequestSchema } = await import("@modelcontextprotocol/sdk/types.js");
+  const handler = server._requestHandlers?.get(ListToolsRequestSchema.shape.method.value);
+  if (!handler) return [];
+  const result = await handler({ method: "tools/list", params: {} }, {});
+  _cachedToolspec = (result.tools || []).map((t) => ({
+    name:        t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+  }));
+  return _cachedToolspec;
+}
+
+app.get("/toolspec.json", async (_req, res) => {
+  try {
+    const tools = await buildToolspec();
+    res.set("cache-control", "public, max-age=300");
+    res.json(tools);
+  } catch (e) {
+    res.status(500).json({ error: "toolspec_build_failed", detail: String(e?.message || e) });
+  }
+});
+
 // ── MCP session table ──────────────────────────────────────────────────
 // Each MCP client (Smithery's catalog scrape, LobeChat invocation, etc)
 // keeps its own server + transport keyed by the session id MCP issues
@@ -116,7 +149,8 @@ app.post("/mcp", mcpLimiter, async (req, res) => {
       // only walk the tool list. End users connecting persistently can
       // pass AIFINPAY_AGENT_SECRET through their MCP client env (this
       // happens via the stdio path; the HTTP path is for listings).
-      const { server, agent } = createServer({ logFn: sessionLog });
+      // createServer became async in @aifinpay/mcp 0.1.0-alpha.3 — must await
+      const { server, agent } = await createServer({ logFn: sessionLog });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;

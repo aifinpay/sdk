@@ -27,6 +27,7 @@ import {
   isAddress,
 } from "viem";
 import { polygon } from "viem/chains";
+import { Connection, PublicKey } from "@solana/web3.js";
 import {
   putOrder,
   hasOrder,
@@ -63,6 +64,14 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 // broadcasting a tx themselves.
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
 const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/venice/chat/completions";
+
+// ── Solana payment option (atomic b2b_pay_with_split, live 2026-05-18) ──
+const SOLANA_RPC             = process.env.SOLANA_RPC             || "https://api.mainnet-beta.solana.com";
+const SOLANA_PROGRAM_ID      = process.env.AIFINPAY_PROGRAM_ID    || "5g9zWHF1Vv6GiGpA2ZbJQbSCDZd5hAk9AyvabRJvKFx2";
+const SOLANA_TREASURY        = process.env.SOLANA_TREASURY        || "AnbjcK3uD5KYFtb3EuUxHTyJMfC4oyLo7hF2uELfKagN";
+const BRIDGE_MERCHANT_SOLANA = process.env.BRIDGE_MERCHANT_SOLANA || "";
+// 0.0001 SOL ≈ $0.02 per call at SOL ≈ $200 — adjust to match Venice pricing.
+const PRICE_LAMPORTS         = process.env.PRICE_LAMPORTS         || "100000";
 
 if (!VENICE_API_KEY) {
   console.warn(`[${SERVICE_NAME}] WARNING: VENICE_API_KEY not set — upstream calls will 401.`);
@@ -163,9 +172,37 @@ async function challenge402(res) {
       function_signature:    "payMatic(address,address,string)",
       ttl_seconds:           Math.floor(ORDER_TTL_MS / 1000),
     },
+
+    // Solana b2b_pay_with_split — fee-on-top, contract adds 1%+0.01% on top
+    ...(BRIDGE_MERCHANT_SOLANA ? (() => {
+      const baseMerchant = BigInt(PRICE_LAMPORTS);
+      const treasuryFee  = (baseMerchant * 100n) / 10000n;
+      const ipFee        = (baseMerchant * 1n)   / 10000n;
+      const total        = baseMerchant + treasuryFee + ipFee;
+      return {
+        pay_solana: {
+          chain:                       "solana",
+          program_id:                  SOLANA_PROGRAM_ID,
+          instruction:                 "b2b_pay_with_split",
+          merchant_wallet:             BRIDGE_MERCHANT_SOLANA,
+          treasury:                    SOLANA_TREASURY,
+          merchant_amount_lamports:    baseMerchant.toString(),
+          treasury_amount_lamports:    treasuryFee.toString(),
+          ip_creator_amount_lamports:  ipFee.toString(),
+          total_lamports:              total.toString(),
+          order_id:                    orderId,
+          asset:                       "SOL",
+          ttl_seconds:                 Math.floor(ORDER_TTL_MS / 1000),
+        },
+      };
+    })() : {}),
+
     retry: {
-      legacy_pay_matic: { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },
-      standard_x402:    { method: "POST", headers: ["x-payment"],               same_body: true },
+      legacy_pay_matic:    { method: "POST", headers: ["x-tx-hash", "x-order-id"], same_body: true },
+      standard_x402:       { method: "POST", headers: ["x-payment"],               same_body: true },
+      ...(BRIDGE_MERCHANT_SOLANA ? {
+        solana_b2b_split:  { method: "POST", headers: ["x-solana-tx", "x-order-id"], same_body: true },
+      } : {}),
     },
   });
 }
@@ -193,6 +230,45 @@ async function verifyX402Payment(paymentHeader, paymentRequirements) {
   const settleJson = await settleRes.json();
   if (!settleJson.success) return { ok: false, reason: `facilitator /settle failed: ${settleJson.error || "no error"}` };
   return { ok: true, payer: settleJson.payer || null, tx: settleJson.transaction || null };
+}
+
+// Soft-verify a Solana b2b_pay_with_split tx — see io-net-bridge for full
+// commentary. Confirms program invocation, merchant in account list,
+// order_id substring in instruction data.
+const solanaConnection = SOLANA_RPC ? new Connection(SOLANA_RPC, "confirmed") : null;
+async function verifySolanaTx(txHash, expectedOrderId) {
+  if (!solanaConnection) return { ok: false, reason: "solana_rpc_not_configured" };
+  if (await isTxConsumed(txHash)) return { ok: false, reason: "tx already consumed (replay)" };
+  let tx;
+  try {
+    tx = await solanaConnection.getTransaction(txHash, {
+      commitment: "confirmed", maxSupportedTransactionVersion: 0,
+    });
+  } catch (e) { return { ok: false, reason: `getTransaction failed: ${e.message}` }; }
+  if (!tx) return { ok: false, reason: "tx not found (still pending or wrong cluster)" };
+  if (tx.meta?.err) return { ok: false, reason: `tx failed on-chain: ${JSON.stringify(tx.meta.err)}` };
+
+  const keys = tx.transaction.message.staticAccountKeys
+    ?? tx.transaction.message.accountKeys ?? [];
+  const keyStrs = keys.map((k) => k.toString());
+  if (!keyStrs.includes(SOLANA_PROGRAM_ID)) {
+    return { ok: false, reason: `tx did not invoke program ${SOLANA_PROGRAM_ID}` };
+  }
+  if (!keyStrs.includes(BRIDGE_MERCHANT_SOLANA)) {
+    return { ok: false, reason: `merchant ${BRIDGE_MERCHANT_SOLANA} not in account list` };
+  }
+
+  const orderIdBytes = Buffer.from(expectedOrderId, "utf8");
+  const ixs = tx.transaction.message.compiledInstructions
+    ?? tx.transaction.message.instructions ?? [];
+  const orderIdMatches = ixs.some((ix) => {
+    const data = ix.data instanceof Uint8Array
+      ? Buffer.from(ix.data)
+      : (typeof ix.data === "string" ? Buffer.from(ix.data, "base64") : Buffer.alloc(0));
+    return data.includes(orderIdBytes);
+  });
+  if (!orderIdMatches) return { ok: false, reason: `order_id "${expectedOrderId}" not found in tx data` };
+  return { ok: true, payer: keyStrs[0], tx: txHash };
 }
 
 async function verifyTx(txHash, expectedOrderId) {
@@ -302,6 +378,41 @@ app.post("/chat/completions", challengeLimiter, async (req, res) => {
     })).toString("base64"));
     res.status(upstreamRes.status).type("application/json").send(upstreamBody);
     return;
+  }
+
+  // Solana atomic split path
+  const solanaTx = req.get("x-solana-tx");
+  if (solanaTx && BRIDGE_MERCHANT_SOLANA) {
+    const orderId = req.get("x-order-id");
+    if (!orderId) return challenge402(res);
+    if (!(await hasOrder(orderId))) {
+      return res.status(409).json({ error: "unknown_or_expired_order_id" });
+    }
+    const verifiedSol = await verifySolanaTx(solanaTx, orderId);
+    if (!verifiedSol.ok) {
+      return res.status(402).json({ error: "payment_verification_failed", detail: verifiedSol.reason });
+    }
+    let upstreamRes;
+    try {
+      upstreamRes = await fetch(VENICE_API_URL, {
+        method: "POST",
+        headers: upstreamHeaders(),
+        body: JSON.stringify(req.body),
+      });
+    } catch (e) {
+      return res.status(502).json({ error: "upstream_unreachable", detail: e.message });
+    }
+    if (upstreamRes.status >= 500) {
+      let body; try { body = await upstreamRes.text(); } catch { body = "<unreadable>"; }
+      return res.status(502).json({ error: "upstream_5xx", upstream_status: upstreamRes.status, upstream_body: body.slice(0, 500) });
+    }
+    await Promise.all([consumeOrder(orderId), markTxConsumed(solanaTx)]);
+    let payload;
+    try { payload = await upstreamRes.json(); } catch { payload = { error: "upstream_non_json" }; }
+    res.set("x-payment-receipt", JSON.stringify({
+      paid_by: verifiedSol.payer, chain: "solana", tx_hash: solanaTx, total_lamports: PRICE_LAMPORTS, order_id: orderId,
+    }));
+    return res.status(upstreamRes.status).type("application/json").send(JSON.stringify(payload));
   }
 
   const txHash  = req.get("x-tx-hash");

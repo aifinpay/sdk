@@ -95,12 +95,23 @@ app.get("/toolspec.json", async (req, res) => {
   try {
     const tools = await buildToolspec();
     res.set("cache-control", "public, max-age=300");
-    // Catalogs differ in expected envelope:
-    //   - Google Vertex AI Agent Builder requires { tools: [...] }
-    //   - Some legacy importers want a bare array
-    // Default to the wrapped form; allow ?bare=1 for the legacy case.
-    if (req.query.bare === "1") {
+    const variant = String(req.query.variant || "wrapped");
+    // Different catalogs expect different envelopes:
+    //   bare      — raw array (legacy)
+    //   wrapped   — { tools: [...] }  (most catalogs, default)
+    //   vertex    — { interfaces: [{ protocolBinding: "MCP", tools: [...] }] }
+    //               (Google Vertex AI Agent Builder validator complains
+    //               about /interfaces/0/protocolBinding when missing)
+    if (variant === "bare") {
       res.json(tools);
+    } else if (variant === "vertex") {
+      res.json({
+        interfaces: [{
+          protocolBinding: "MCP",
+          endpoint:        PUBLIC_URL,
+          tools,
+        }],
+      });
     } else {
       res.json({ tools });
     }

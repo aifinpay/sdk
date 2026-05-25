@@ -91,11 +91,19 @@ async function buildToolspec() {
   return _cachedToolspec;
 }
 
-app.get("/toolspec.json", async (_req, res) => {
+app.get("/toolspec.json", async (req, res) => {
   try {
     const tools = await buildToolspec();
     res.set("cache-control", "public, max-age=300");
-    res.json(tools);
+    // Catalogs differ in expected envelope:
+    //   - Google Vertex AI Agent Builder requires { tools: [...] }
+    //   - Some legacy importers want a bare array
+    // Default to the wrapped form; allow ?bare=1 for the legacy case.
+    if (req.query.bare === "1") {
+      res.json(tools);
+    } else {
+      res.json({ tools });
+    }
   } catch (e) {
     res.status(500).json({ error: "toolspec_build_failed", detail: String(e?.message || e) });
   }

@@ -24,7 +24,7 @@ import {
   generatePrivateKey,
   type PrivateKeyAccount,
 } from "viem/accounts";
-import { polygon } from "viem/chains";
+import { polygon, base, arbitrum, optimism, bsc, mainnet, type Chain } from "viem/chains";
 import {
   Connection,
   Keypair,
@@ -39,6 +39,17 @@ import {
   X402Error,
 } from "./errors.js";
 import { Agent, type AgentOptions } from "./agent.js";
+import {
+  bridgeQuote     as crossChainQuote,
+  bridgeExecute   as crossChainExecute,
+  bridgeWaitForArrival,
+  EVM_CHAINS,
+  USDC_NATIVE,
+  type BridgeQuote,
+  type BridgeReceipt,
+  type BridgeQuoteOptions,
+  type EvmChainName,
+} from "./crossChain.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -193,6 +204,17 @@ const SPLITTER_PAY_MATIC_ABI = [
   },
 ] as const;
 
+// ── EVM chain object lookup — viem chains keyed by our EvmChainName ─────
+
+const EVM_CHAIN_OBJECTS: Record<EvmChainName, Chain> = {
+  ethereum: mainnet,
+  polygon,
+  bsc,
+  arbitrum,
+  optimism,
+  base,
+};
+
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 export class ProviderUnknownError extends AiFinPayError {}
@@ -253,6 +275,10 @@ export class AiFinPayAgent {
   private  telemetry:      boolean;
   private  _polygonPublic?: PublicClient;
   private  _polygonWallet?: WalletClient;
+  // Multi-chain client cache for cross-chain orchestration (bridge flows).
+  // Keyed by EVM chain name (see crossChain.ts EVM_CHAINS).
+  private  _evmClients: Map<EvmChainName, { publicClient: PublicClient; walletClient: WalletClient }> = new Map();
+  private  evmRpcUrls: Partial<Record<EvmChainName, string>> = {};
 
   private constructor(
     inner:      Agent,
@@ -269,9 +295,16 @@ export class AiFinPayAgent {
     this.solanaRpc   = (opts as { solanaRpc?: string }).solanaRpc
       ?? process.env.AIFINPAY_SOLANA_RPC
       ?? "https://api.mainnet-beta.solana.com";
+    // Optional RPC overrides for non-Polygon EVM chains used in bridge flows.
+    // Falls back to viem's chain.rpcUrls.default if not provided.
+    const evmOpts = opts as { evmRpcUrls?: Partial<Record<EvmChainName, string>> };
+    if (evmOpts.evmRpcUrls) this.evmRpcUrls = evmOpts.evmRpcUrls;
+    if (this.polygonRpc) this.evmRpcUrls.polygon = this.polygonRpc;
   }
 
   // Lazy viem clients — only spun up when a Polygon flow runs.
+  // Kept as-is for the legacy call() Polygon path; cross-chain flows use
+  // evmClients() below which is generalised across all supported EVM chains.
   private polygonClients(): { publicClient: PublicClient; walletClient: WalletClient } {
     if (!this._polygonPublic) {
       this._polygonPublic = createPublicClient({
@@ -287,6 +320,28 @@ export class AiFinPayAgent {
       });
     }
     return { publicClient: this._polygonPublic, walletClient: this._polygonWallet };
+  }
+
+  // Multi-EVM-chain client cache. Used by bridge orchestration to sign source
+  // and (optionally) dest transactions on chains other than Polygon. Picks
+  // viem's built-in chain definitions; an optional RPC override per chain
+  // can be supplied via opts.evmRpcUrls.
+  private evmClients(name: EvmChainName): { publicClient: PublicClient; walletClient: WalletClient } {
+    const cached = this._evmClients.get(name);
+    if (cached) return cached;
+
+    const chain = EVM_CHAIN_OBJECTS[name];
+    if (!chain) {
+      throw new AiFinPayError(`evmClients: unsupported EVM chain "${name}"`);
+    }
+    const rpcUrl  = this.evmRpcUrls[name];
+    const transport = rpcUrl ? http(rpcUrl) : http();
+
+    const publicClient = createPublicClient({ chain, transport });
+    const walletClient = createWalletClient({ chain, transport, account: this.evmAccount });
+    const pair = { publicClient, walletClient };
+    this._evmClients.set(name, pair);
+    return pair;
   }
 
   // ── Constructors ─────────────────────────────────────────────────────────
@@ -492,6 +547,87 @@ export class AiFinPayAgent {
    */
   async deposit(_usd: number, _opts?: { asset?: "USDC" | "USDT" | "SOL" | "MATIC"; chain?: ChainId }): Promise<unknown> {
     throw new AiFinPayError("deposit() not implemented yet — see migration phase 1.5");
+  }
+
+  // ── Cross-chain orchestration (Phase 1.5a: EVM↔EVM via LiFi) ────────────
+  //
+  // We orchestrate; we do not custody. The agent signs every step.
+  // See Obsidian/21 - Unified Agent Economy non-goals.
+  //
+  // Typical flow for "agent has USDC on Base, merchant wants USDC on Polygon":
+  //   const quote   = await agent.bridgeQuote({ fromChain: "base", toChain: "polygon", amount_usdc: 1.0 });
+  //   const receipt = await agent.bridgeExecute(quote);                  // sign source tx
+  //   const arrival = await agent.bridgeWaitForArrival(receipt.source_tx); // wait for dest
+  //   // ...then proceed with agent.call({ provider, chain: "polygon" })
+
+  /**
+   * Quote a USDC-denominated cross-chain transfer via LiFi.
+   *
+   * The convenience overload takes a USD amount and the chain names; the
+   * full overload accepts arbitrary token addresses for non-USDC corridors.
+   * The agent's EVM address is used as both `fromAddress` and `toAddress`
+   * unless overridden — bridging to a different recipient is rare for agents.
+   */
+  async bridgeQuote(
+    opts: {
+      fromChain: EvmChainName;
+      toChain:   EvmChainName;
+      // EITHER: USDC convenience — pass amount_usdc, defaults to native USDC on both chains.
+      amount_usdc?: number;
+      // OR: arbitrary token corridor — pass tokens + raw amount (base units).
+      fromToken?: `0x${string}`;
+      toToken?:   `0x${string}`;
+      fromAmount?: string;
+      // Common
+      toAddress?: `0x${string}`;
+      slippage?:  number;
+    },
+  ): Promise<BridgeQuote> {
+    const fromToken = opts.fromToken ?? USDC_NATIVE[opts.fromChain];
+    const toToken   = opts.toToken   ?? USDC_NATIVE[opts.toChain];
+    const fromAmount = opts.fromAmount
+      ?? (opts.amount_usdc !== undefined
+            ? Math.round(opts.amount_usdc * 1e6).toString() // USDC has 6 decimals
+            : undefined);
+    if (!fromAmount) {
+      throw new AiFinPayError(
+        `bridgeQuote: provide either amount_usdc OR fromAmount (in base units)`,
+      );
+    }
+    const quoteOpts: BridgeQuoteOptions = {
+      fromChain:   opts.fromChain,
+      toChain:     opts.toChain,
+      fromToken,
+      toToken,
+      fromAmount,
+      fromAddress: this.evmAccount.address as `0x${string}`,
+      toAddress:   opts.toAddress ?? (this.evmAccount.address as `0x${string}`),
+      slippage:    opts.slippage,
+    };
+    return crossChainQuote(quoteOpts);
+  }
+
+  /**
+   * Execute a previously-fetched bridge quote. Signs and submits the source
+   * transaction with the agent's EVM key on the SOURCE chain. Returns once
+   * source-side inclusion is confirmed; dest-side arrival is async — call
+   * `bridgeWaitForArrival(receipt.source_tx)` if you need to block on it.
+   */
+  async bridgeExecute(quote: BridgeQuote): Promise<BridgeReceipt> {
+    const { publicClient, walletClient } = this.evmClients(quote.from.chain);
+    return crossChainExecute(quote, walletClient, publicClient);
+  }
+
+  /**
+   * Wait for the bridge to deliver on the destination chain. Wraps LiFi's
+   * /status polling; timeout default is 30 minutes (Circle CCTP can take
+   * 15-25 min on Polygon side). Throws AiFinPayError on timeout.
+   */
+  async bridgeWaitForArrival(
+    sourceTxHash: `0x${string}`,
+    opts:         { pollIntervalMs?: number; timeoutMs?: number } = {},
+  ): Promise<{ status: "done" | "failed"; dest_tx?: string; raw: unknown }> {
+    return bridgeWaitForArrival(sourceTxHash, opts);
   }
 
   // ── Call ────────────────────────────────────────────────────────────────

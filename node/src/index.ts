@@ -41,6 +41,25 @@ export {
   SessionExpiredError,
 } from "./unifiedAgent.js";
 
+// ── Cross-chain orchestration (Phase 1.5a — EVM↔EVM via LiFi) ────────────
+// Standalone primitives — also exposed as methods on AiFinPayAgent.
+// Use the methods (agent.bridgeQuote / agent.bridgeExecute) unless you
+// need to orchestrate from a wallet that isn't an AiFinPayAgent instance.
+export {
+  bridgeQuote,
+  bridgeExecute,
+  bridgeWaitForArrival,
+  EVM_CHAINS,
+  USDC_NATIVE,
+  USDC_BRIDGED,
+} from "./crossChain.js";
+export type {
+  BridgeQuote,
+  BridgeReceipt,
+  BridgeQuoteOptions,
+  EvmChainName,
+} from "./crossChain.js";
+
 // ── Legacy chain-aware surface (kept for back-compat) ───────────────────
 export { Agent } from "./agent.js";
 export type { AgentOptions, Invoice, PayInit } from "./agent.js";

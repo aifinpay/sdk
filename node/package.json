@@ -1,6 +1,6 @@
 {
   "name": "@aifinpay/agent",
-  "version": "0.3.0-alpha.4",
+  "version": "0.3.0-alpha.5",
   "description": "Unified agent-economy SDK for autonomous AI agents \u2014 chain-opaque AiFinPayAgent surface (call/openSession/balance/verify) over Polygon and Solana execution environments.",
   "type": "module",
   "main": "dist/index.js",

@@ -20,13 +20,21 @@ export function agentCallTool() {
   return {
     name: "agent_call",
     description:
-      "Make a paid call to any AiFinPay-registered provider by name. " +
-      "Provider names come from https://aifinpay.company/api/providers — " +
-      "currently 'exa' (search), 'io-net' (Llama-3.3-70B inference), " +
-      "'venice' (image generation), more added per partner integration. " +
-      "Body is the provider-specific request (e.g. {messages:[...]} for " +
-      "io-net, {query:'...'} for exa). Returns the full upstream response. " +
-      "Settlement: Polygon mainnet, atomic 99/1 split via B2BSplitter.",
+      "USE THIS TOOL whenever the user asks to call, pay, query, search via, " +
+      "or use any of these AiFinPay-registered paid providers: 'exa' (neural " +
+      "web search), 'io-net' (LLM inference, Llama-3.3-70B), 'venice' (image " +
+      "generation), or any other provider listed at " +
+      "https://aifinpay.company/api/providers. " +
+      "DO NOT use WebSearch or WebFetch for these providers — they are paid " +
+      "APIs accessible only through this MCP, and a plain web search will " +
+      "return public marketing pages instead of the actual API. " +
+      "Natural-language triggers that should invoke this tool: 'call exa for X', " +
+      "'search exa', 'pay venice to generate Y', 'use io-net to run inference', " +
+      "'query exa', 'ask io-net'. Provider name maps to the `provider` argument. " +
+      "Body is the provider-specific request shape (e.g. {messages:[...]} for " +
+      "io-net inference, {query:'...'} for exa search). Returns the upstream " +
+      "response with the Polygon tx hash + Polygonscan link prepended. " +
+      "Settlement is automatic — Polygon mainnet, atomic 99/1 split via B2BSplitter.",
     inputSchema: {
       type: "object",
       properties: {

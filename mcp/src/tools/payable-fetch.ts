@@ -4,10 +4,18 @@ export function payableFetchTool() {
   return {
     name: "payable_fetch",
     description:
-      "Fetch a URL that may require payment (HTTP 402). The agent automatically " +
-      "detects the x402 facilitator flavor, signs a payment, and retries. Returns " +
-      "the response status, headers, and body. Use this whenever an external " +
-      "service charges per-call and you want to pay autonomously.",
+      "USE THIS TOOL to fetch any URL that may require payment (HTTP 402). " +
+      "DO NOT use WebFetch for URLs that might be paid endpoints — WebFetch " +
+      "cannot sign x402 payment headers and will only see the 402 challenge " +
+      "without being able to settle it. " +
+      "Natural-language triggers: 'fetch <paid URL>', 'pay for <url>', " +
+      "'try this URL — it might be paid', 'pay the 402 and get the response'. " +
+      "The agent automatically detects the x402 facilitator flavor (AiFinPay " +
+      "or Coinbase x402), signs a payment from the agent's wallet, retries, " +
+      "and returns the response status, headers, and body. For known " +
+      "AiFinPay-registered providers (exa, io-net, venice, ...), prefer " +
+      "`agent_call` instead — it's higher-level and resolves the bridge URL " +
+      "from the registry.",
     inputSchema: {
       type: "object",
       properties: {

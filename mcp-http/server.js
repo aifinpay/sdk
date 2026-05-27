@@ -181,6 +181,39 @@ app.post("/mcp", mcpLimiter, async (req, res) => {
       return;
     }
 
+    // Catalog crawlers (Google Vertex AI Agent Builder, etc.) sometimes
+    // POST to the MCP URL with an empty or non-MCP body, expecting a
+    // "specification" document. Their user-agent is typically "Google" or
+    // similar — anything that's clearly not an MCP client sending a real
+    // initialize. Surface the toolspec inline instead of 400 so the import
+    // succeeds. Real MCP clients that mis-send their initialize will also
+    // get the toolspec, which is harmless (gives them the tool list).
+    const ua = String(req.headers["user-agent"] || "").toLowerCase();
+    const isLikelyCrawler =
+      ua.includes("google") || ua.includes("bot") || ua.includes("crawler") ||
+      ua.includes("censys") || ua.includes("vertex") ||
+      // empty/missing body → not a real MCP request
+      !req.body || (typeof req.body === "object" && Object.keys(req.body).length === 0);
+    if (isLikelyCrawler) {
+      try {
+        const tools = await buildToolspec();
+        sessionLog("info", `crawler GET-as-POST ua="${ua}" → toolspec`);
+        res.set("cache-control", "public, max-age=300");
+        return res.json({
+          server:           "@aifinpay/mcp-http",
+          protocol:         "Model Context Protocol",
+          transport:        "Streamable HTTP",
+          protocol_version: "2024-11-05",
+          mcp_endpoint:     PUBLIC_URL,
+          description:
+            "Pay-per-call MCP server. Seven tools let autonomous AI agents settle on-chain payments on Polygon and Solana mainnet through registered providers (Exa, io.net, Venice).",
+          tools,
+        });
+      } catch (e) {
+        sessionLog("error", `crawler toolspec build failed: ${e?.message || e}`);
+      }
+    }
+
     return res.status(400).json({
       jsonrpc: "2.0",
       error: { code: -32600, message: "Bad Request: no valid session and not an initialize request" },

@@ -198,14 +198,37 @@ app.post("/mcp", mcpLimiter, async (req, res) => {
   }
 });
 
-// SSE GET — server-to-client notifications channel.
+// GET /mcp — dual mode:
+//   1. With mcp-session-id header → existing session's SSE stream (server-to-
+//      client notifications channel per Streamable HTTP spec).
+//   2. Without session header → catalog-crawler shortcut. Returns the
+//      toolspec inline so crawlers like Google Vertex AI Agent Builder, which
+//      do a GET expecting a "specification" document, can discover us without
+//      speaking the full Streamable HTTP handshake. Without this shortcut they
+//      get a 400 and "Failed to fetch specification from url".
 app.get("/mcp", async (req, res) => {
   const sessionId = req.headers["mcp-session-id"];
   const session = sessionId ? sessions.get(sessionId) : null;
-  if (!session) {
-    return res.status(400).send("Invalid or missing session id");
+  if (session) {
+    await session.transport.handleRequest(req, res);
+    return;
   }
-  await session.transport.handleRequest(req, res);
+  try {
+    const tools = await buildToolspec();
+    res.set("cache-control", "public, max-age=300");
+    res.json({
+      server:          "@aifinpay/mcp-http",
+      protocol:        "Model Context Protocol",
+      transport:       "Streamable HTTP",
+      protocol_version: "2024-11-05",
+      mcp_endpoint:    PUBLIC_URL,
+      description:
+        "Pay-per-call MCP server. Seven tools let autonomous AI agents settle on-chain payments on Polygon and Solana mainnet through registered providers (Exa, io.net, Venice).",
+      tools,
+    });
+  } catch (e) {
+    res.status(500).json({ error: "toolspec_build_failed", detail: String(e?.message || e) });
+  }
 });
 
 // DELETE /mcp — explicit session close.

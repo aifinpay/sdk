@@ -38,6 +38,15 @@ import requests
 
 from .errors import AiFinPayError, X402Error
 from .client import Agent  # legacy Solana-only agent (we wrap it)
+from .cross_chain import (
+    EVM_CHAINS,
+    USDC_NATIVE,
+    BridgeQuote,
+    BridgeReceipt,
+    bridge_quote as _bridge_quote,
+    bridge_execute as _bridge_execute,
+    bridge_wait_for_arrival as _bridge_wait_for_arrival,
+)
 
 # ── EVM imports — heavyish, lazy via top-level so missing deps fail clearly ──
 try:
@@ -284,6 +293,109 @@ class AiFinPayAgent:
         if picked_chain == "solana":
             return self._settle_solana(full_url, challenge, method, body, timeout)
         return self._settle_polygon(full_url, challenge, method, body, timeout)
+
+    # ── Cross-chain orchestration (Phase 1.5a: EVM↔EVM via LiFi) ───────────
+    #
+    # We orchestrate; we do not custody. The agent signs every step.
+    # See Obsidian/21 - Unified Agent Economy non-goals.
+    #
+    # Typical flow for "agent has USDC on Base, merchant wants USDC on Polygon":
+    #
+    #   quote   = agent.bridge_quote(from_chain="base", to_chain="polygon",
+    #                                amount_usdc=1.0)
+    #   receipt = agent.bridge_execute(quote)            # sign source tx
+    #   arrival = agent.bridge_wait_for_arrival(receipt.source_tx)
+    #   # ...then proceed with agent.call(provider=..., chain="polygon")
+
+    def bridge_quote(
+        self,
+        from_chain: str,
+        to_chain:   str,
+        *,
+        amount_usdc: Optional[float] = None,
+        from_token:  Optional[str]   = None,
+        to_token:    Optional[str]   = None,
+        from_amount: Optional[str]   = None,
+        to_address:  Optional[str]   = None,
+        slippage:    Optional[float] = None,
+    ) -> BridgeQuote:
+        """Quote a USDC-denominated cross-chain transfer via LiFi.
+
+        Convenience: pass `amount_usdc` and the chain names — defaults to
+        native USDC on both chains. For arbitrary token corridors, pass
+        `from_token`, `to_token` (ERC-20 addresses) and `from_amount` (base
+        units as a string). The agent's EVM address is used as both
+        `fromAddress` and `toAddress` unless overridden.
+        """
+        ft = from_token or USDC_NATIVE.get(from_chain)
+        tt = to_token   or USDC_NATIVE.get(to_chain)
+        if not ft or not tt:
+            raise AiFinPayError(
+                f"bridge_quote: no default USDC token for {from_chain!r}/{to_chain!r}; "
+                f"pass from_token + to_token explicitly"
+            )
+        amt = from_amount
+        if amt is None and amount_usdc is not None:
+            # USDC has 6 decimals.
+            amt = str(round(amount_usdc * 1_000_000))
+        if not amt:
+            raise AiFinPayError(
+                "bridge_quote: provide either amount_usdc OR from_amount (base units)"
+            )
+        return _bridge_quote(
+            from_chain=from_chain,
+            to_chain=to_chain,
+            from_token=ft,
+            to_token=tt,
+            from_amount=amt,
+            from_address=self.evm_address,
+            to_address=to_address or self.evm_address,
+            slippage=slippage,
+        )
+
+    def bridge_execute(self, quote: BridgeQuote) -> BridgeReceipt:
+        """Execute a previously-fetched bridge quote.
+
+        Signs and submits the source-chain transaction with the agent's EVM
+        key on the SOURCE chain. Returns once source-side inclusion is
+        confirmed; dest-side arrival is async — call
+        ``bridge_wait_for_arrival(receipt.source_tx)`` if you need to block
+        on it.
+
+        web3.py is a required dependency of this SDK, so this method works
+        out of the box. Internally we point the SDK's Web3 instance at the
+        source chain. If you've configured `polygon_rpc` only and want to
+        bridge from a non-Polygon source chain, override the Web3 endpoint
+        before calling: set `agent._w3 = Web3(HTTPProvider(<source-rpc>))`.
+
+        For operators who'd rather sign out-of-band (e.g. on a hardware
+        wallet), grab `quote.raw_quote["transactionRequest"]` from the
+        quote object and sign+broadcast it yourself.
+        """
+        return _bridge_execute(
+            quote,
+            evm_account=self.evm_account,
+            web3=self._web3(),
+        )
+
+    def bridge_wait_for_arrival(
+        self,
+        source_tx_hash:   str,
+        *,
+        poll_interval_ms: int = 5000,
+        timeout_ms:       int = 30 * 60 * 1000,
+    ) -> dict:
+        """Wait for the bridge to deliver on the destination chain.
+
+        Wraps LiFi's /status polling; timeout default is 30 minutes (Circle
+        CCTP can take 15-25 min on Polygon side). Raises AiFinPayError on
+        timeout.
+        """
+        return _bridge_wait_for_arrival(
+            source_tx_hash,
+            poll_interval_ms=poll_interval_ms,
+            timeout_ms=timeout_ms,
+        )
 
     # ── Polygon settlement ─────────────────────────────────────────────────
 

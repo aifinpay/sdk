@@ -167,8 +167,50 @@ export async function runAgentClaimSelf(
     solRes = { ok: false, reason: `solana_signer_unavailable: ${(e as Error).message}` };
   }
 
-  // ── 4. Report ──────────────────────────────────────────────────────
+  // ── 4. Balance check (best-effort) — drives funded-vs-unfunded copy ─
+  // Never block the claim flow on a balance check; if the RPC is down or
+  // balance() throws, fall back to the standard funding recommendation.
+  let polygonUsdc = 0;
+  let solanaUsdc  = 0;
   try {
+    const bal = await ctx.agent.balance();
+    polygonUsdc = bal.chains.polygon.usdc ?? 0;
+    solanaUsdc  = bal.chains.solana.usdc  ?? 0;
+  } catch {
+    /* swallow — keep funding_recommendation as-is */
+  }
+
+  // ── 5. Report ──────────────────────────────────────────────────────
+  try {
+    // Dashboard URLs live at dashboard.aifinpay.company regardless of
+    // which host the user used for magic-link sign-in. apiBase is correct
+    // only for /me (which lives at whichever host the user signed in via).
+    const DASHBOARD_BASE = "https://dashboard.aifinpay.company";
+
+    // Funded threshold: 0.10 USDC (~4 io-net calls). Below this we still
+    // show the funding tip; at-or-above we show a "Funded" status so the
+    // agent doesn't tell the user to send money they already sent.
+    const FUNDED_USDC_THRESHOLD = 0.10;
+    const polygonFunded = polygonUsdc >= FUNDED_USDC_THRESHOLD;
+
+    const fundingFields: Record<string, string> = polygonFunded
+      ? {
+          funding_status: `Funded — $${polygonUsdc.toFixed(2)} USDC available on Polygon`,
+        }
+      : {
+          // Live bridges (io.net, Exa, Venice) settle on Polygon — fund
+          // the Polygon address with USDC for autonomous calls today.
+          // Solana is claimed for visibility; SOL-native settlement is
+          // available on bridges that advertise pay_solana in their 402.
+          funding_recommendation: `Send USDC on Polygon to ${evmAddr} (~0.5 USDC ≈ 20 calls). Optionally fund the Solana address with SOL to use Solana-native bridges.`,
+        };
+
+    // Surface Solana USDC status when balance() exposes a non-zero value;
+    // schema doesn't currently include solana.usdc but future-proof here.
+    if (solanaUsdc >= FUNDED_USDC_THRESHOLD) {
+      fundingFields.funding_status_solana = `Funded — $${solanaUsdc.toFixed(2)} USDC available on Solana`;
+    }
+
     return {
       content: [
         {
@@ -180,12 +222,8 @@ export async function runAgentClaimSelf(
             solana_address: solAddr,
             solana_claim: solRes.ok ? "ok" : `skipped (${solRes.reason})`,
             label: label || null,
-            // Live bridges (io.net, Exa, Venice) settle on Polygon — fund
-            // the Polygon address with USDC for autonomous calls today.
-            // Solana is claimed for visibility; SOL-native settlement is
-            // available on bridges that advertise pay_solana in their 402.
-            funding_recommendation: `Send USDC on Polygon to ${evmAddr} (~0.5 USDC ≈ 20 calls). Optionally fund the Solana address with SOL to use Solana-native bridges.`,
-            next: `Visit ${apiBase}/agents/${evmAddr} (Polygon view) or ${apiBase}/agents/${solAddr} (Solana view). Watchlist: ${apiBase}/me.`,
+            ...fundingFields,
+            next: `Visit ${DASHBOARD_BASE}/agents/${evmAddr} (Polygon view) or ${DASHBOARD_BASE}/agents/${solAddr} (Solana view). Watchlist: ${apiBase}/me.`,
           }, null, 2),
         },
       ],

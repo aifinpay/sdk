@@ -719,6 +719,12 @@ export class AiFinPayAgent {
       }
       this.spend24h.add(cost);
       if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, tx: solTxSig });
+      // @internal — attach settlement metadata for consumers (MCP, telemetry
+      // dashboards) that need to surface the tx hash without an extra RPC
+      // call. Response headers are read-only after construction so we use
+      // an instance property + cast on the read side.
+      (paidResp as unknown as { aifinpayTx?: string; aifinpayChain?: ChainId }).aifinpayTx = solTxSig;
+      (paidResp as unknown as { aifinpayTx?: string; aifinpayChain?: ChainId }).aifinpayChain = "solana";
       return paidResp;
     }
 
@@ -766,6 +772,9 @@ export class AiFinPayAgent {
 
     this.spend24h.add(cost);
     if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, tx: txHash });
+    // @internal — see Solana branch above for rationale on property-attach.
+    (paidResp as unknown as { aifinpayTx?: string; aifinpayChain?: ChainId }).aifinpayTx = txHash;
+    (paidResp as unknown as { aifinpayTx?: string; aifinpayChain?: ChainId }).aifinpayChain = "polygon";
     return paidResp;
   }
 

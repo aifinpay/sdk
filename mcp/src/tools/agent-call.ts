@@ -87,13 +87,26 @@ export async function runAgentCall(
     const text = await resp.text();
     let parsed: unknown = text;
     try { parsed = JSON.parse(text); } catch { /* keep as text */ }
+
+    // Pull the @internal settlement metadata attached by AiFinPayAgent.call
+    // (see unifiedAgent.ts). Surfacing the tx hash here lets the agent show
+    // a clickable explorer link in chat without re-querying the chain.
+    const meta = resp as unknown as { aifinpayTx?: string; aifinpayChain?: string };
+    const txHash = meta.aifinpayTx;
+    const txChain = meta.aifinpayChain;
+    const txLine = txHash
+      ? `Paid on ${txChain ?? "polygon"}. Tx: ${txHash} → https://${txChain === "solana" ? "solscan.io/tx" : "polygonscan.com/tx"}/${txHash}\n\n`
+      : "";
+
+    const bodyText = typeof parsed === "string"
+      ? parsed
+      : JSON.stringify({ status: resp.status, body: parsed }, null, 2);
+
     return {
       content: [
         {
           type: "text",
-          text: typeof parsed === "string"
-            ? parsed
-            : JSON.stringify({ status: resp.status, body: parsed }, null, 2),
+          text: txLine + bodyText,
         },
       ],
     };

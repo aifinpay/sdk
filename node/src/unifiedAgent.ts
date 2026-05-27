@@ -215,6 +215,23 @@ const EVM_CHAIN_OBJECTS: Record<EvmChainName, Chain> = {
   base,
 };
 
+// Mainnet USDC SPL mint on Solana (Circle native, not Wormhole-wrapped USDCet)
+const USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Native Polygon USDC ERC20 (Circle-native, not bridged USDC.e)
+const USDC_POLYGON_ERC20 = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359" as const;
+
+// Minimal ERC20 balanceOf ABI fragment
+const ERC20_BALANCE_OF_ABI = [
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ type: "address", name: "owner" }],
+    outputs: [{ type: "uint256" }],
+  },
+] as const;
+
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 export class ProviderUnknownError extends AiFinPayError {}
@@ -875,17 +892,21 @@ export class AiFinPayAgent {
     const maticUsd = parseFloat(process.env.AIFINPAY_MATIC_USD ?? "0.70");
     const solUsd   = parseFloat(process.env.AIFINPAY_SOL_USD   ?? "200");
 
-    const polygon = await this.fetchPolygonNative().catch(() => 0);
-    const solana  = await this.fetchSolanaNative().catch(() => 0);
+    const polygon     = await this.fetchPolygonNative().catch(() => 0);
+    const solana      = await this.fetchSolanaNative().catch(() => 0);
+    const solana_usdc = await this.fetchSolanaUsdc().catch(() => 0);
+    const polygon_usdc = await this.fetchPolygonUsdc().catch(() => 0);
 
-    const polygonUsd = polygon * maticUsd;
-    const solanaUsd  = solana * solUsd;
+    const polygonUsd     = polygon * maticUsd;
+    const solanaUsd      = solana * solUsd;
+    const solanaUsdcUsd  = solana_usdc;   // USDC ≈ $1
+    const polygonUsdcUsd = polygon_usdc;  // USDC ≈ $1
 
     return {
-      agent_balance_usd: polygonUsd + solanaUsd,
+      agent_balance_usd: polygonUsd + solanaUsd + solanaUsdcUsd + polygonUsdcUsd,
       chains: {
-        solana:  { sol: solana,   usdc: 0, msecco_balance: 0 },
-        polygon: { matic: polygon, usdc: 0, msecco_balance: 0 },
+        solana:  { sol: solana,   usdc: solana_usdc,  msecco_balance: 0 },
+        polygon: { matic: polygon, usdc: polygon_usdc, msecco_balance: 0 },
       },
       spend_24h_usd: this.spend24h.total24h(),
       budget_caps: this.budgetCaps,
@@ -918,6 +939,68 @@ export class AiFinPayAgent {
     const j = (await r.json()) as { result?: { value?: number } };
     const lamports = j.result?.value ?? 0;
     return lamports / 1e9;
+  }
+
+  /**
+   * Sum SPL USDC balances across all token accounts owned by the agent's
+   * Solana pubkey. Uses raw JSON-RPC `getTokenAccountsByOwner` so we don't
+   * pull `@solana/spl-token` as a dep. Returns 0 (never throws) when the
+   * RPC is unreachable or returns nothing — `balance()` must remain a
+   * non-blocking introspection call.
+   */
+  private async fetchSolanaUsdc(): Promise<number> {
+    const rpc = process.env.AIFINPAY_SOLANA_RPC || "https://api.mainnet.solana.com";
+    try {
+      const r = await this.inner.fetchImpl(rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getTokenAccountsByOwner",
+          params: [
+            this.solanaAddress,
+            { mint: USDC_SOLANA_MINT },
+            { encoding: "jsonParsed" },
+          ],
+        }),
+      });
+      if (!r.ok) return 0;
+      const j = (await r.json()) as {
+        result?: { value?: Array<{ account?: { data?: { parsed?: { info?: { tokenAmount?: { uiAmount?: number } } } } } }> };
+      };
+      // Sum all USDC token accounts (usually just one, but be safe)
+      const accounts = j.result?.value ?? [];
+      let total = 0;
+      for (const acc of accounts) {
+        const ui = acc.account?.data?.parsed?.info?.tokenAmount?.uiAmount;
+        if (typeof ui === "number") total += ui;
+      }
+      return total;
+    } catch {
+      return 0; // never block balance() on Solana RPC issues
+    }
+  }
+
+  /**
+   * Read the native Polygon USDC (Circle-issued, 6 decimals) balance for the
+   * agent's EVM address via the existing viem publicClient. Returns 0
+   * (never throws) on RPC failure — see fetchSolanaUsdc rationale.
+   */
+  private async fetchPolygonUsdc(): Promise<number> {
+    try {
+      const { publicClient } = this.polygonClients();
+      const raw = await publicClient.readContract({
+        address:      USDC_POLYGON_ERC20,
+        abi:          ERC20_BALANCE_OF_ABI,
+        functionName: "balanceOf",
+        args:         [this.evmAccount.address],
+      });
+      // USDC has 6 decimals on Polygon
+      return Number(raw) / 1e6;
+    } catch {
+      return 0;
+    }
   }
 
   // ── Reputation ──────────────────────────────────────────────────────────

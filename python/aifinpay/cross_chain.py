@@ -258,7 +258,11 @@ def bridge_execute(
             tx_payload["gas"] = 500_000  # safe default for bridge txs
 
     signed = web3.eth.account.sign_transaction(tx_payload, evm_account.key)
-    tx_hash = web3.eth.send_raw_transaction(signed.raw_transaction)
+    # web3 v7: raw_transaction; v6: rawTransaction — support both.
+    raw = getattr(signed, "raw_transaction", None)
+    if raw is None:
+        raw = getattr(signed, "rawTransaction")
+    tx_hash = web3.eth.send_raw_transaction(raw)
     receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
     tx_hash_hex = tx_hash.hex() if hasattr(tx_hash, "hex") else str(tx_hash)
     if not tx_hash_hex.startswith("0x"):

@@ -46,7 +46,7 @@ class AiFinPayFacilitator:
             "treasury_vault" in body or "program_id" in body
         )
 
-    def __init__(self, base_url: str = "https://aifinpay.company", timeout: int = 30):
+    def __init__(self, base_url: str = "https://aifinpay.io", timeout: int = 30):
         # base_url is needed to fetch a fresh nonce. Defaults to the
         # canonical AiFinPay backend; can be pointed at a self-hosted
         # facilitator in tests.

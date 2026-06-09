@@ -16,7 +16,7 @@ Quick start:
     resp = agent.pay("https://api.example.com/v1/data")
 
     # Convenience — same as pay() but pinned to GET / POST
-    resp = agent.get("https://aifinpay.company/api/stats")
+    resp = agent.get("https://aifinpay.io/api/stats")
 """
 
 from .client import Agent, Invoice
@@ -56,15 +56,16 @@ from .cross_chain import (
 # Lazy import so installs without the EVM/Solana extras keep working with
 # the legacy Agent class.
 def __getattr__(name: str):
-    if name == "AiFinPayAgent":
-        from .unified_agent import AiFinPayAgent as _A
-        return _A
+    if name in ("AiFinPayAgent", "NetworkAgent"):
+        from . import unified_agent
+        return getattr(unified_agent, name)
     raise AttributeError(name)
 
-__version__ = "0.3.0a1"
+__version__ = "0.3.0a2"
 __all__ = [
     "Agent",
     "AiFinPayAgent",
+    "NetworkAgent",
     "Invoice",
     "AiFinPayError",
     "FundingTimeoutError",

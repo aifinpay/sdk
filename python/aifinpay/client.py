@@ -20,7 +20,9 @@ from .errors import (
 )
 from .facilitators import PayOptions, detect_facilitator
 
-DEFAULT_BASE_URL = "https://aifinpay.company"
+# Canonical domain is aifinpay.io (aifinpay.company 301-redirects there,
+# which silently downgrades POST → GET in requests — never rely on it).
+DEFAULT_BASE_URL = "https://aifinpay.io"
 DEFAULT_TIMEOUT = 30  # seconds
 
 
@@ -56,7 +58,7 @@ class Agent:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._session = requests.Session()
-        self._session.headers["User-Agent"] = "aifinpay-agent-py/0.2.0a2"
+        self._session.headers["User-Agent"] = "aifinpay-agent-py/0.3.0a2"
 
     # ── Constructors ────────────────────────────────────────────────────────
 

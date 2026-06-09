@@ -51,14 +51,27 @@ from .cross_chain import (
 # ── EVM imports — heavyish, lazy via top-level so missing deps fail clearly ──
 try:
     from eth_account import Account as EvmAccount
+    from eth_account.messages import encode_defunct
     from web3 import Web3
-    from web3.middleware import geth_poa_middleware
 except ImportError as e:  # pragma: no cover
     raise ImportError(
         "AiFinPayAgent requires web3 + eth_account. "
         "Install with: pip install 'aifinpay-agent[unified]' "
         "or: pip install web3 eth-account"
     ) from e
+
+# POA middleware moved between web3 majors: v6 exports geth_poa_middleware,
+# v7 renamed it to ExtraDataToPOAMiddleware. Importing it inside the hard
+# block above used to make the WHOLE module unimportable on web3 v7 with a
+# misleading "install web3" error. Optional by design — Polygon RPCs work
+# without it for our read/sign/send path.
+try:  # web3 v6
+    from web3.middleware import geth_poa_middleware as _poa_middleware  # type: ignore[attr-defined]
+except ImportError:
+    try:  # web3 v7+
+        from web3.middleware import ExtraDataToPOAMiddleware as _poa_middleware  # type: ignore[attr-defined]
+    except ImportError:  # pragma: no cover
+        _poa_middleware = None
 
 # ── Solana imports — solders for tx building, nacl already in deps ──
 try:
@@ -78,7 +91,9 @@ except ImportError as e:  # pragma: no cover
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
-DEFAULT_REGISTRY_URL = "https://api.aifinpay.company/api/providers"
+# Canonical domain is aifinpay.io (aifinpay.company 301-redirects there,
+# which silently downgrades POST → GET in requests — never rely on it).
+DEFAULT_REGISTRY_URL = "https://api.aifinpay.io/api/providers"
 DEFAULT_POLYGON_RPC  = "https://polygon.drpc.org"
 DEFAULT_SOLANA_RPC   = "https://api.mainnet-beta.solana.com"
 
@@ -120,6 +135,95 @@ class ProviderEntry:
         )
 
 
+@dataclass
+class NetworkAgent:
+    """A published entry in the public AiFinPay agent network — what
+    ``search()`` returns and ``register()`` produces. Identity is the agent's
+    EVM address. Mirrors the ``NetworkAgent`` interface in @aifinpay/agent."""
+    address:      Optional[str]
+    name:         Optional[str]
+    description:  Optional[str]
+    endpoint:     Optional[str]
+    capabilities: list[str]
+    pricing:      Optional[dict]   # {"per_call": float, "currency": str}
+    rating:       Optional[float]
+    published_at: Optional[int]
+    created_at:   Optional[int]
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NetworkAgent":
+        return cls(
+            address      = d.get("address"),
+            name         = d.get("name"),
+            description  = d.get("description"),
+            endpoint     = d.get("endpoint"),
+            capabilities = d.get("capabilities") or [],
+            pricing      = d.get("pricing"),
+            rating       = d.get("rating"),
+            published_at = d.get("published_at"),
+            created_at   = d.get("created_at"),
+        )
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
+
+def _normalize_pricing(p: Optional[dict]) -> Optional[dict]:
+    """Accept {"per_call"|"perCall": float, "currency"?: str}; default USDC."""
+    if not p:
+        return None
+    per_call = p.get("per_call", p.get("perCall"))
+    if per_call is None:
+        return None
+    return {"per_call": per_call, "currency": p.get("currency", "USDC")}
+
+
+def _safe_json(r: requests.Response) -> dict:
+    try:
+        data = r.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _evm_key_from_seed(seed: bytes) -> bytes:
+    """Canonical cross-SDK EVM key derivation: SHA-256("aifinpay:evm:v1\\0" + seed).
+
+    Must stay byte-for-byte identical to `crypto32()` in the Node SDK
+    (node/src/unifiedAgent.ts) — same seed MUST yield the same EVM address
+    in both SDKs."""
+    if len(seed) != 32:
+        raise AiFinPayError(f"seed must be 32 bytes, got {len(seed)}")
+    return hashlib.sha256(b"aifinpay:evm:v1\0" + seed).digest()
+
+
+def _signed_raw_tx(signed: Any) -> bytes:
+    """web3 v7 renamed SignedTransaction.rawTransaction → raw_transaction.
+    Support both so the pinned range web3>=6.0 actually works."""
+    raw = getattr(signed, "raw_transaction", None)
+    if raw is None:
+        raw = getattr(signed, "rawTransaction")
+    return raw
+
+
+def _guard_challenge_usd(est_usd: float, cap: Optional[float], label: str) -> None:
+    """Sanity-check the USD estimate of an on-chain challenge amount BEFORE
+    signing. Mirrors the Node SDK's guardChallengeAmount: the estimate uses
+    env-priced MATIC/SOL (AIFINPAY_MATIC_USD / AIFINPAY_SOL_USD), so a 2x +
+    $0.05 tolerance absorbs price drift while still catching the dangerous
+    case — a bridge quoting $0.01 in the registry then demanding 100x in
+    the 402 challenge. No cap declared → no check (caller opted out)."""
+    from .errors import PaymentTooExpensiveError
+    if cap is None or not est_usd or est_usd <= 0:
+        return
+    limit = max(cap * 2, cap + 0.05)
+    if est_usd > limit:
+        raise PaymentTooExpensiveError(
+            f"bridge {label} challenge demands ≈${est_usd:.4f} on-chain, above "
+            f"the allowed ${limit:.4f} (cost cap {cap:.4f} + tolerance). Set "
+            f"AIFINPAY_MATIC_USD / AIFINPAY_SOL_USD for a tighter estimate."
+        )
+
+
 # ── Main class ──────────────────────────────────────────────────────────────
 
 class AiFinPayAgent:
@@ -151,7 +255,7 @@ class AiFinPayAgent:
         )
         self.registry_url = registry_url or os.environ.get(
             "AIFINPAY_REGISTRY_URL",
-            (base_url or "https://api.aifinpay.company").rstrip("/") + "/api/providers",
+            (base_url or "https://api.aifinpay.io").rstrip("/") + "/api/providers",
         )
         self.polygon_rpc = polygon_rpc or os.environ.get("AIFINPAY_POLYGON_RPC", DEFAULT_POLYGON_RPC)
         self.solana_rpc  = solana_rpc  or os.environ.get("AIFINPAY_SOLANA_RPC",  DEFAULT_SOLANA_RPC)
@@ -170,10 +274,13 @@ class AiFinPayAgent:
         """
         Derive both keypairs from one 32-byte hex seed.
           Solana key = nacl.sign.keyPair.fromSeed(seed)
-          EVM key    = keccak256(seed)[:32]
-        Independent paths — NOT BIP-44. Matches the Node SDK behavior.
+          EVM key    = SHA-256(b"aifinpay:evm:v1\\0" + seed)
+        Independent paths — NOT BIP-44. Byte-for-byte the Node SDK's
+        derivation (it shipped first and settled the live pilot, so it is
+        the canonical one). Earlier 0.3.0a releases of THIS package used
+        keccak256(seed) here, which produced a DIFFERENT EVM address than
+        Node for the same seed — that was a parity bug, fixed 2026-06-09.
         """
-        from Crypto.Hash import keccak  # type: ignore
         seed = bytes.fromhex(seed_hex.removeprefix("0x"))
         if len(seed) != 32:
             raise AiFinPayError(f"seed must be 32 bytes, got {len(seed)}")
@@ -181,14 +288,19 @@ class AiFinPayAgent:
         # secret_b58 is 64 bytes (secret + public) per tweetnacl convention
         secret_64 = signing.encode() + signing.verify_key.encode()
         inner = Agent.from_secret_b58(base58.b58encode(secret_64).decode())
-        evm_seed = keccak.new(digest_bits=256).update(seed).digest()
-        return cls(inner, "0x" + evm_seed.hex(), **kwargs)
+        return cls(inner, "0x" + _evm_key_from_seed(seed).hex(), **kwargs)
 
     @classmethod
     def from_solana_secret(cls, secret_b58: str, *, evm_private_key: Optional[str] = None,
                             **kwargs) -> "AiFinPayAgent":
+        """Load the Solana side from an existing secret. The EVM key is
+        derived deterministically from the secret's 32-byte seed (same
+        domain-separated SHA-256 as ``from_seed``) unless ``evm_private_key``
+        is given. A random key here would change the EVM address on every
+        restart and strand anything sent to the previous one."""
         inner = Agent.from_secret_b58(secret_b58)
-        evm_pk = evm_private_key or ("0x" + os.urandom(32).hex())
+        sol_seed = base58.b58decode(secret_b58)[:32]
+        evm_pk = evm_private_key or ("0x" + _evm_key_from_seed(sol_seed).hex())
         return cls(inner, evm_pk, **kwargs)
 
     # ── Identity ───────────────────────────────────────────────────────────
@@ -229,17 +341,138 @@ class AiFinPayAgent:
                 return p
         raise AiFinPayError(f"Provider {name!r} not in registry at {self.registry_url}")
 
+    # ── Network directory (publish / discover) ────────────────────────────
+    #
+    # Self-sovereign: the agent proves control of its EVM address by signing a
+    # one-time nonce with its own key (EIP-191) — no partner account needed.
+    # Backend verifies the same canonical message with viem.verifyMessage; the
+    # template MUST stay byte-for-byte in sync with the Node SDK and
+    # routes/network-agents.js.
+
+    def register(self, *, name: str, endpoint: str,
+                 description: Optional[str] = None,
+                 capabilities: Optional[list[str]] = None,
+                 pricing: Optional[dict] = None,
+                 timeout: float = 10.0) -> NetworkAgent:
+        """Publish this agent to the public AiFinPay network so other agents
+        can discover and call it. ``pricing`` is a dict like
+        ``{"per_call": 0.01, "currency": "USDC"}`` (``perCall`` also accepted)."""
+        base  = self.inner.base_url
+        addr  = self.evm_address.lower()
+        nonce = self._network_nonce(timeout=timeout)
+        signature = self._sign_evm(f"AiFinPay-network-publish:polygon:{addr}:{nonce}")
+
+        payload = {
+            "name":         name,
+            "description":  description,
+            "endpoint":     endpoint,
+            "capabilities": capabilities or [],
+            "pricing":      _normalize_pricing(pricing),
+            "nonce":        nonce,
+            "signature":    signature,
+        }
+        r = requests.post(
+            f"{base}/api/network/agents/{addr}/publish",
+            json=payload, timeout=timeout,
+            headers={"content-type": "application/json"},
+        )
+        data = _safe_json(r)
+        if not r.ok or not data.get("ok") or not data.get("agent"):
+            raise AiFinPayError(
+                f"network publish failed: {data.get('error') or r.status_code}"
+            )
+        return NetworkAgent.from_dict(data["agent"])
+
+    def unregister(self, *, timeout: float = 10.0) -> None:
+        """Remove this agent from the public directory (same signature proof)."""
+        base  = self.inner.base_url
+        addr  = self.evm_address.lower()
+        nonce = self._network_nonce(timeout=timeout)
+        signature = self._sign_evm(f"AiFinPay-network-unpublish:polygon:{addr}:{nonce}")
+        r = requests.post(
+            f"{base}/api/network/agents/{addr}/unpublish",
+            json={"nonce": nonce, "signature": signature}, timeout=timeout,
+            headers={"content-type": "application/json"},
+        )
+        if not r.ok:
+            raise AiFinPayError(
+                f"network unpublish failed: {_safe_json(r).get('error') or r.status_code}"
+            )
+
+    def search(self, capability: Optional[str] = None, *,
+               q: Optional[str] = None, limit: Optional[int] = None,
+               timeout: float = 10.0) -> list[NetworkAgent]:
+        """Search the public network. Pass a bare capability
+        (``agent.search("weather")``) or use ``q`` / ``limit`` for finer
+        control. Returns directory entries; invoking one lands in a later
+        release."""
+        params: dict[str, Any] = {}
+        if capability:
+            params["capability"] = capability
+        if q:
+            params["q"] = q
+        if limit:
+            params["limit"] = limit
+        r = requests.get(
+            f"{self.inner.base_url}/api/network/agents",
+            params=params, timeout=timeout,
+        )
+        if not r.ok:
+            raise AiFinPayError(f"network search {self.inner.base_url} → {r.status_code}")
+        return [NetworkAgent.from_dict(a) for a in (_safe_json(r).get("agents") or [])]
+
+    def _network_nonce(self, *, timeout: float = 10.0) -> str:
+        r = requests.get(f"{self.inner.base_url}/api/network/nonce", timeout=timeout)
+        if not r.ok:
+            raise AiFinPayError(f"network nonce → {r.status_code}")
+        nonce = _safe_json(r).get("nonce")
+        if not nonce:
+            raise AiFinPayError("network nonce: empty response")
+        return nonce
+
+    def _sign_evm(self, message: str) -> str:
+        """EIP-191 personal_sign with the agent's own EVM key — produces a
+        signature verifiable by viem.verifyMessage on the backend."""
+        signed = self.evm_account.sign_message(encode_defunct(text=message))
+        sig = signed.signature.hex()
+        return sig if sig.startswith("0x") else "0x" + sig
+
     # ── Lazy clients ──────────────────────────────────────────────────────
 
     def _web3(self) -> Web3:
         if self._w3 is None:
             w3 = Web3(Web3.HTTPProvider(self.polygon_rpc, request_kwargs={"timeout": 30}))
-            try:
-                w3.middleware_onion.inject(geth_poa_middleware, layer=0)
-            except Exception:
-                pass
+            if _poa_middleware is not None:
+                try:
+                    w3.middleware_onion.inject(_poa_middleware, layer=0)
+                except Exception:
+                    pass
             self._w3 = w3
         return self._w3
+
+    def _splitter_treasury(self, splitter: str) -> Optional[str]:
+        """Read + cache B2BSplitter.treasury(). None on RPC failure."""
+        cache = getattr(self, "_treasury_cache", None)
+        if cache is None:
+            cache = self._treasury_cache = {}
+        key = splitter.lower()
+        if key in cache:
+            return cache[key]
+        try:
+            w3 = self._web3()
+            c = w3.eth.contract(
+                address=Web3.to_checksum_address(splitter),
+                abi=[{"type": "function", "name": "treasury",
+                      "stateMutability": "view", "inputs": [],
+                      "outputs": [{"type": "address"}]}],
+            )
+            treasury = c.functions.treasury().call()
+            if not treasury or int(treasury, 16) == 0:
+                return None
+            cache[key] = treasury
+            return treasury
+        except Exception:
+            return None
 
     # ── Public: chain-opaque call ─────────────────────────────────────────
 
@@ -263,6 +496,17 @@ class AiFinPayAgent:
         url = p.bridge_url
         if not url:
             raise AiFinPayError(f"Provider {provider!r} has no bridge_url")
+
+        # `cost` is a budget cap, not just a hint — enforce it. (It used to
+        # be accepted and silently ignored.) Registry-level pre-check here;
+        # the challenge-level guard runs in the settle path with the actual
+        # on-chain amount.
+        from .errors import PaymentTooExpensiveError
+        if cost is not None and p.price_usd is not None and p.price_usd > cost:
+            raise PaymentTooExpensiveError(
+                f"provider {provider!r} lists ${p.price_usd:.4f} per call, "
+                f"caller cap is ${cost:.4f}"
+            )
 
         path = {
             "search":    "/search",
@@ -291,8 +535,8 @@ class AiFinPayAgent:
             raise X402Error("bridge returned 402 with non-JSON body")
 
         if picked_chain == "solana":
-            return self._settle_solana(full_url, challenge, method, body, timeout)
-        return self._settle_polygon(full_url, challenge, method, body, timeout)
+            return self._settle_solana(full_url, challenge, method, body, timeout, cost=cost)
+        return self._settle_polygon(full_url, challenge, method, body, timeout, cost=cost)
 
     # ── Cross-chain orchestration (Phase 1.5a: EVM↔EVM via LiFi) ───────────
     #
@@ -400,7 +644,8 @@ class AiFinPayAgent:
     # ── Polygon settlement ─────────────────────────────────────────────────
 
     def _settle_polygon(self, full_url: str, challenge: dict, method: str,
-                        body: Optional[dict], timeout: float) -> requests.Response:
+                        body: Optional[dict], timeout: float,
+                        cost: Optional[float] = None) -> requests.Response:
         pm = challenge.get("pay_matic")
         if not pm:
             raise X402Error(
@@ -415,9 +660,18 @@ class AiFinPayAgent:
             abi=SPLITTER_PAY_MATIC_ABI,
         )
         merchant = Web3.to_checksum_address(pm["merchant_wallet"])
-        ip_creator = "0x" + "00" * 20
+        # ipCreator routing: prefer the challenge's explicit ip_creator; else
+        # route the royalty slot to the splitter's treasury (mirrors the Node
+        # SDK + Solana branch). Passing address(0) would skip the transfer and
+        # permanently strand the 1bp inside B2BSplitter — no sweep function.
+        ip_creator = pm.get("ip_creator") or self._splitter_treasury(pm["splitter"]) \
+            or ("0x" + "00" * 20)
+        ip_creator = Web3.to_checksum_address(ip_creator)
         order_id = pm["order_id"]
         total_wei = int(pm["total_wei"])
+
+        matic_usd = float(os.environ.get("AIFINPAY_MATIC_USD", "0.70"))
+        _guard_challenge_usd(total_wei / 1e18 * matic_usd, cost, full_url)
 
         nonce = w3.eth.get_transaction_count(self.evm_address)
         gas_price = w3.eth.gas_price
@@ -436,7 +690,7 @@ class AiFinPayAgent:
             tx["gas"] = 300_000  # safe default
 
         signed = w3.eth.account.sign_transaction(tx, self.evm_account.key)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        tx_hash = w3.eth.send_raw_transaction(_signed_raw_tx(signed))
         receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
         if receipt.status != 1:
             raise AiFinPayError(f"Polygon tx reverted: {tx_hash.hex()}")
@@ -462,13 +716,18 @@ class AiFinPayAgent:
     # ── Solana settlement (b2b_pay_with_split) ───────────────────────────
 
     def _settle_solana(self, full_url: str, challenge: dict, method: str,
-                       body: Optional[dict], timeout: float) -> requests.Response:
+                       body: Optional[dict], timeout: float,
+                       cost: Optional[float] = None) -> requests.Response:
         ps = challenge.get("pay_solana")
         if not ps:
             raise X402Error(
                 f"bridge returned 402 without a pay_solana block — operator has not "
                 f"set BRIDGE_MERCHANT_SOLANA. Use chain='polygon' instead."
             )
+
+        sol_usd = float(os.environ.get("AIFINPAY_SOL_USD", "200"))
+        lamports_est = int(ps.get("total_lamports") or ps["merchant_amount_lamports"])
+        _guard_challenge_usd(lamports_est / 1e9 * sol_usd, cost, full_url)
 
         program_id = SolPubkey.from_string(ps["program_id"])
         merchant   = SolPubkey.from_string(ps["merchant_wallet"])
@@ -513,8 +772,12 @@ class AiFinPayAgent:
         msg = SolMessage.new_with_blockhash([ix], agent_pubkey, blockhash)
         tx  = SolTransaction([self.sol_keypair], msg, blockhash)
 
+        # Solana RPC sendTransaction accepts base58 (deprecated) or base64 —
+        # NOT hex. The old {"encoding": "hex"} form failed on every node.
+        import base64 as _b64
         send_resp = rpc_req({"jsonrpc": "2.0", "id": 1, "method": "sendTransaction",
-                             "params": [bytes(tx).hex(), {"encoding": "hex", "preflightCommitment": "confirmed"}]})
+                             "params": [_b64.b64encode(bytes(tx)).decode("ascii"),
+                                        {"encoding": "base64", "preflightCommitment": "confirmed"}]})
         if "error" in send_resp:
             raise AiFinPayError(f"Solana send failed: {send_resp['error']}")
         tx_sig = send_resp["result"]

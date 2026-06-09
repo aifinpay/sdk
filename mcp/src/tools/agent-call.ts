@@ -24,7 +24,7 @@ export function agentCallTool() {
       "or use any of these AiFinPay-registered paid providers: 'exa' (neural " +
       "web search), 'io-net' (LLM inference, Llama-3.3-70B), 'venice' (image " +
       "generation), or any other provider listed at " +
-      "https://aifinpay.company/api/providers. " +
+      "https://aifinpay.io/api/providers. " +
       "DO NOT use WebSearch or WebFetch for these providers — they are paid " +
       "APIs accessible only through this MCP, and a plain web search will " +
       "return public marketing pages instead of the actual API. " +
@@ -125,7 +125,7 @@ export async function runAgentCall(
         ? "Tip: increase the per-call cost cap or use `agent_quote` to preview before paying."
         : message.toLowerCase().includes("revert") || message.toLowerCase().includes("insufficient")
           ? `Tip: ensure the EVM address ${ctx.agent.evmAddress} holds enough POL on Polygon for gas + payment.`
-          : `Provider may be misconfigured. Check https://aifinpay.company/api/providers.`;
+          : `Provider may be misconfigured. Check https://aifinpay.io/api/providers.`;
     return {
       isError: true,
       content: [{ type: "text", text: `agent_call failed: ${message}\n\n${hint}` }],

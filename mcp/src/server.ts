@@ -54,12 +54,26 @@ export async function createServer(config: McpConfig = {}) {
         return a;
       })();
 
+  // AIFINPAY_MAX_USD is the documented "hard cap on a single payment".
+  // payable_fetch enforces it via PayOptions, but agent_call settles through
+  // AiFinPayAgent.call() which only honours the agent's budget caps — wire
+  // the cap there too, otherwise the primary tool has NO runaway protection.
+  if (config.maxAmountUsd !== undefined && Number.isFinite(config.maxAmountUsd)) {
+    agent.setBudget({ per_call_usd: config.maxAmountUsd });
+    log("info", `[aifinpay-mcp] per-call cap: $${config.maxAmountUsd} (AIFINPAY_MAX_USD)`);
+  } else {
+    log(
+      "warn",
+      "[aifinpay-mcp] AIFINPAY_MAX_USD not set — agent_call/payable_fetch have NO per-payment cap. Strongly recommended.",
+    );
+  }
+
   log("info", `[aifinpay-mcp] solana: ${agent.solanaAddress} · evm: ${agent.evmAddress}`);
 
   const server = new Server(
     {
       name: "@aifinpay/mcp",
-      version: "0.1.0-alpha.3",
+      version: "0.1.0-alpha.8",
     },
     {
       capabilities: {

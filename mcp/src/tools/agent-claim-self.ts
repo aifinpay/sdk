@@ -5,8 +5,8 @@ import type { ToolContext } from "../server.js";
  * autonomously by signing a claim challenge with its own key.
  *
  * Flow (executed inside the tool, no copy-paste between UIs):
- *   1. User signs in to /login on aifinpay.company → gets a magic-link
- *      email with URL like `https://aifinpay.company/api/auth/verify?token=…`
+ *   1. User signs in to /login on aifinpay.io → gets a magic-link
+ *      email with URL like `https://aifinpay.io/api/auth/verify?token=…`
  *   2. User pastes that URL to the agent: "claim yourself on my account
  *      using this magic link"
  *   3. Agent calls this tool with the magic_link_url
@@ -31,7 +31,7 @@ export function agentClaimSelfTool() {
     description:
       "Attach this agent to a user's AiFinPay account autonomously. " +
       "Requires a magic-link URL the user got after signing in at " +
-      "https://aifinpay.company/login. The tool will use the link to " +
+      "https://aifinpay.io/login. The tool will use the link to " +
       "establish a session, request a claim challenge for this agent's " +
       "EVM address, sign it with the agent's key, and submit the proof. " +
       "After this completes, the user's /me page lists this agent and " +
@@ -43,7 +43,7 @@ export function agentClaimSelfTool() {
           type: "string",
           description:
             "The URL the user received in the sign-in email. Looks like " +
-            "https://aifinpay.company/api/auth/verify?token=… — one-shot, " +
+            "https://aifinpay.io/api/auth/verify?token=… — one-shot, " +
             "expires 15 minutes after the user requested it.",
         },
         label: {
@@ -66,7 +66,7 @@ export async function runAgentClaimSelf(
   if (!magicLinkUrl || !magicLinkUrl.includes("/api/auth/verify?token=")) {
     return {
       isError: true,
-      content: [{ type: "text", text: "magic_link_url required — should look like https://aifinpay.company/api/auth/verify?token=…" }],
+      content: [{ type: "text", text: "magic_link_url required — should look like https://aifinpay.io/api/auth/verify?token=…" }],
     };
   }
 
@@ -182,10 +182,10 @@ export async function runAgentClaimSelf(
 
   // ── 5. Report ──────────────────────────────────────────────────────
   try {
-    // Dashboard URLs live at dashboard.aifinpay.company regardless of
+    // Dashboard URLs live at dashboard.aifinpay.io regardless of
     // which host the user used for magic-link sign-in. apiBase is correct
     // only for /me (which lives at whichever host the user signed in via).
-    const DASHBOARD_BASE = "https://dashboard.aifinpay.company";
+    const DASHBOARD_BASE = "https://dashboard.aifinpay.io";
 
     // Funded threshold: 0.10 USDC (~4 io-net calls). Below this we still
     // show the funding tip; at-or-above we show a "Funded" status so the

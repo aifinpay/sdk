@@ -1,13 +1,13 @@
 {
   "$schema": "https://modelcontextprotocol.io/schemas/server.json",
   "name": "aifinpay",
-  "version": "0.1.0-alpha.2",
+  "version": "0.1.0-alpha.8",
   "description": "Stripe for AI agents. Pay for any HTTP API in stablecoins or native tokens on Polygon and Solana mainnet with one MCP call. Non-custodial, on-chain settlement.",
   "vendor": "CoinSecurities (SECCO)",
   "license": "MIT",
-  "homepage": "https://aifinpay.company",
+  "homepage": "https://aifinpay.io",
   "repository": "https://github.com/AiFinPay/sdk",
-  "icon": "https://aifinpay.company/favicon.png",
+  "icon": "https://aifinpay.io/favicon.png",
   "categories": ["payments", "web3", "agent-tools"],
   "tags": [
     "payments", "ai-agents", "x402", "polygon", "solana",
@@ -26,18 +26,26 @@
     }
   },
   "env": {
-    "AIFINPAY_AGENT_SECRET": "base58 Ed25519 secret (persistent agent identity)",
-    "AIFINPAY_MAX_USD": "hard cap per call, default 0.10",
-    "AIFINPAY_CHAIN": "polygon | solana | auto, default auto"
+    "AIFINPAY_AGENT_SECRET": "base58 Ed25519 secret (persistent agent identity; Solana + EVM addresses both derive from it)",
+    "AIFINPAY_MAX_USD": "hard cap per paid call (agent_call + payable_fetch), default 0.10",
+    "AIFINPAY_BASE_URL": "override the AiFinPay backend endpoint, default https://aifinpay.io"
   },
   "tools": [
+    {
+      "name": "agent_call",
+      "description": "Registry-resolved paid call to a named provider (exa, io-net, venice, ...). Settles on-chain, returns the upstream response + tx hash."
+    },
+    {
+      "name": "agent_claim_self",
+      "description": "Attach this agent to a user's AiFinPay account via magic-link + key signature."
+    },
     {
       "name": "payable_fetch",
       "description": "Fetch any URL; auto-settle 402 on-chain and retry. Returns the gated response body."
     },
     {
       "name": "agent_address",
-      "description": "Return the agent's wallet address (for funding)."
+      "description": "Return the agent's wallet addresses (Polygon + Solana, for funding)."
     },
     {
       "name": "agent_quote",
@@ -45,7 +53,7 @@
     },
     {
       "name": "pay_with_split",
-      "description": "Execute a payment through the splitter contract for B2B endpoints (atomic 99/1 split)."
+      "description": "On-chain instructions for a payment through the splitter contract for B2B endpoints (atomic fee-on-top split)."
     },
     {
       "name": "quote_split",

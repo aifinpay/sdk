@@ -61,7 +61,7 @@ agent identity (and any funded Seat) persists across restarts.
 | Var | Default | Purpose |
 |---|---|---|
 | `AIFINPAY_AGENT_SECRET` | — | Base58 secret. If absent → ephemeral agent printed to stderr. |
-| `AIFINPAY_BASE_URL` | `https://aifinpay.company` | Backend URL for nonce + funding probes. |
+| `AIFINPAY_BASE_URL` | `https://aifinpay.io` | Backend URL for nonce + funding probes. |
 | `AIFINPAY_TIMEOUT_MS` | `30000` | Request timeout. |
 | `AIFINPAY_MAX_USD` | — | Hard cap per single payment. Strongly recommended. |
 
@@ -71,7 +71,7 @@ agent identity (and any funded Seat) persists across restarts.
 import { createServer, loadConfigFromEnv } from "@aifinpay/mcp";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-const { server } = createServer({
+const { server } = await createServer({
   ...loadConfigFromEnv(),
   agentSecretB58: "your-secret-here",
   maxAmountUsd: 0.10,

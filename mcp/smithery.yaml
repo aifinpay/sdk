@@ -1,15 +1,15 @@
 name: aifinpay
 displayName: AiFinPay
 description: Stripe for AI agents. Pay for any HTTP API in stablecoins or native tokens on Polygon and Solana mainnet with one MCP call. Non-custodial, on-chain settlement.
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.8
 license: MIT
-homepage: https://aifinpay.company
+homepage: https://aifinpay.io
 repository: https://github.com/AiFinPay/sdk
-documentation: https://aifinpay.company/docs
+documentation: https://aifinpay.io/docs
 author: CoinSecurities (SECCO)
 contact: hello@aifinpay.company
 
-icon: https://aifinpay.company/favicon.png
+icon: https://aifinpay.io/favicon.png
 
 categories:
   - payments
@@ -43,37 +43,32 @@ configSchema:
     AIFINPAY_AGENT_SECRET:
       type: string
       title: Agent secret (base58)
-      description: Persistent Ed25519 secret for the agent identity. Leave blank to generate a fresh keypair each session (testing only). Signing happens locally inside the MCP process; never transmitted to AiFinPay servers.
+      description: Persistent Ed25519 secret for the agent identity. Both the Solana and the EVM address derive deterministically from it. Leave blank to generate a fresh keypair each session (testing only). Signing happens locally inside the MCP process; never transmitted to AiFinPay servers.
     AIFINPAY_MAX_USD:
       type: string
       title: Max USD per call
-      description: Hard cap per payable_fetch call. Refuses to settle anything above this.
+      description: Hard cap per paid call (applies to both payable_fetch and agent_call). Refuses to settle anything above this.
       default: "0.10"
-    AIFINPAY_API:
+    AIFINPAY_BASE_URL:
       type: string
       title: API base URL
-      description: Override the AiFinPay API endpoint.
-      default: https://api.aifinpay.company
-    AIFINPAY_CHAIN:
-      type: string
-      title: Preferred chain
-      description: Preferred chain for outgoing payments. "auto" picks the cheapest available chain per endpoint.
-      enum:
-        - polygon
-        - solana
-        - auto
-      default: auto
+      description: Override the AiFinPay backend endpoint (nonce, manifest, registry).
+      default: https://aifinpay.io
   required: []
 
 tools:
+  - name: agent_call
+    description: Registry-resolved paid call to a named provider (exa, io-net, venice, ...). Resolves bridge URL + price from the public registry, settles on-chain, retries with proof, returns the upstream response with the tx hash.
+  - name: agent_claim_self
+    description: Attach this agent to a user's AiFinPay account using a magic-link URL — the agent signs a claim challenge with its own key. Shows up on the user's watchlist + dashboard.
   - name: payable_fetch
     description: One-shot paid HTTP fetch. Hits a 402-gated endpoint, negotiates the quote, signs and broadcasts payment on-chain, retries with proof, and returns the response body. The agent's fetch for the paid web.
   - name: agent_address
-    description: Return the agent's public address (Polygon 0x or Solana base58) derived from the configured secret. Used for funding the agent before its first paid call.
+    description: Return the agent's on-chain identities (Polygon 0x and Solana base58) derived from the configured secret. Used for funding the agent before its first paid call.
   - name: agent_quote
-    description: Get a price quote for any 402-gated endpoint without paying. Returns amount, currency, chain, splitter recipient, and TTL.
+    description: Get a price quote for any 402-gated endpoint without paying. Returns facilitator flavor and merchant terms.
   - name: pay_with_split
-    description: Execute a payment through the AiFinPay splitter contract for B2B partner endpoints. Partner receives their share and the protocol fee is taken on top, atomically in a single transaction.
+    description: Get on-chain instructions for a payment through the AiFinPay splitter contract for B2B partner endpoints. Partner receives their share and the protocol fee is taken on top, atomically in a single transaction.
   - name: quote_split
     description: Get a quote for a B2B endpoint using the atomic fee-on-top splitter. Shows partner share, protocol fee, chain, and expiry.
 

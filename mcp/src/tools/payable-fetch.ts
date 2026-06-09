@@ -112,7 +112,7 @@ export async function runPayableFetch(
       `${err.constructor.name}: ${err.message}`,
       `Tip: ensure agent ${ctx.agent.solanaAddress} has a funded Seat PDA, ` +
         `or use the unified \`agent_call\` tool (Polygon settlement). ` +
-        `Docs: https://aifinpay.company/docs`,
+        `Docs: https://aifinpay.io/docs`,
     );
   }
 }

@@ -18,7 +18,7 @@
  *   import { createServer } from "@aifinpay/mcp";
  *   import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
  *
- *   const { server } = createServer({ agentSecretB58: process.env.SECRET });
+ *   const { server } = await createServer({ agentSecretB58: process.env.SECRET });
  *   await server.connect(new StdioServerTransport());
  */
 export { createServer } from "./server.js";

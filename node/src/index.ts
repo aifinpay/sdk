@@ -16,7 +16,7 @@
  *
  *   const agent = Agent.new();
  *   await agent.reserveSeatInvoice({ amountUsd: 1.0, asset: "USDC" });
- *   const res = await agent.pay("https://aifinpay.company/api/stats");
+ *   const res = await agent.pay("https://aifinpay.io/api/stats");
  */
 
 // ── Unified surface (Phase 1+) ───────────────────────────────────────────
@@ -31,6 +31,7 @@ export type {
   BudgetCaps,
   SessionHandle,
   SessionReceipt,
+  NetworkAgent,
 } from "./unifiedAgent.js";
 export {
   ProviderUnknownError,

@@ -149,6 +149,9 @@ export interface AiFinPayAgentOptions extends AgentOptions {
   budgetCaps?:   BudgetCaps;
   telemetry?:    boolean;    // default true
   polygonRpc?:   string;     // default: https://polygon.drpc.org
+  solanaRpc?:    string;     // default: env AIFINPAY_SOLANA_RPC or mainnet-beta
+  /** RPC overrides for non-Polygon EVM chains used in bridge flows. */
+  evmRpcUrls?:   Partial<Record<EvmChainName, string>>;
 }
 
 // ── 402 challenge body shape returned by AiFinPay paid-proxy bridges ─────
@@ -166,6 +169,10 @@ interface PayMaticChallenge {
     merchant_amount_wei?:  string;
     treasury_amount_wei?:  string;
     ip_creator_amount_wei?: string;
+    /** Optional royalty recipient. When absent the SDK routes the slot to
+     *  the splitter's treasury (zero-address would strand the 1bp in the
+     *  contract — B2BSplitter has no sweep function). */
+    ip_creator?:           string;
     order_id:              string;
     function_signature?:   string;
     ttl_seconds?:          number;
@@ -232,6 +239,18 @@ const ERC20_BALANCE_OF_ABI = [
   },
 ] as const;
 
+// B2BSplitter.treasury() view — used to route the ipCreator royalty slot
+// when the bridge challenge doesn't name a recipient.
+const SPLITTER_TREASURY_ABI = [
+  {
+    type: "function",
+    name: "treasury",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
+  },
+] as const;
+
 // ── Errors ─────────────────────────────────────────────────────────────────
 
 export class ProviderUnknownError extends AiFinPayError {}
@@ -280,6 +299,22 @@ class SpendTracker {
 
 const DEFAULT_REGISTRY_PATH = "/api/providers";
 
+/**
+ * A published entry in the public AiFinPay agent network — what `search()`
+ * returns and `register()` produces. Identity is the agent's EVM address.
+ */
+export interface NetworkAgent {
+  address:      string;
+  name:         string | null;
+  description:  string | null;
+  endpoint:     string | null;
+  capabilities: string[];
+  pricing:      { per_call: number; currency: string } | null;
+  rating:       number | null;
+  published_at: number | null;
+  created_at:   number | null;
+}
+
 export class AiFinPayAgent {
   readonly inner:        Agent;            // existing Solana-flavoured agent
   readonly evmAccount:   PrivateKeyAccount;
@@ -309,13 +344,12 @@ export class AiFinPayAgent {
     this.budgetCaps  = opts.budgetCaps ?? {};
     this.telemetry   = opts.telemetry !== false;
     this.polygonRpc  = opts.polygonRpc ?? "https://polygon.drpc.org";
-    this.solanaRpc   = (opts as { solanaRpc?: string }).solanaRpc
+    this.solanaRpc   = opts.solanaRpc
       ?? process.env.AIFINPAY_SOLANA_RPC
       ?? "https://api.mainnet-beta.solana.com";
     // Optional RPC overrides for non-Polygon EVM chains used in bridge flows.
     // Falls back to viem's chain.rpcUrls.default if not provided.
-    const evmOpts = opts as { evmRpcUrls?: Partial<Record<EvmChainName, string>> };
-    if (evmOpts.evmRpcUrls) this.evmRpcUrls = evmOpts.evmRpcUrls;
+    if (opts.evmRpcUrls) this.evmRpcUrls = opts.evmRpcUrls;
     if (this.polygonRpc) this.evmRpcUrls.polygon = this.polygonRpc;
   }
 
@@ -380,9 +414,11 @@ export class AiFinPayAgent {
    * chains.
    *
    * Solana key = nacl.sign.keyPair.fromSeed(seed)
-   * EVM key    = keccak256(seed)[:32]    (independent path; not BIP-44
-   *                                       compatible — see design notes
-   *                                       in 23 - Unified SDK Design).
+   * EVM key    = SHA-256("aifinpay:evm:v1\0" || seed)
+   *              (domain-separated; independent path; not BIP-44 — see
+   *               design notes in 23 - Unified SDK Design. This is the
+   *               canonical derivation both SDKs implement — the Python
+   *               SDK mirrors it byte-for-byte.)
    *
    * TODO(phase-1): replace with BIP-39/BIP-44 derivation
    *   m/44'/501'/0'/0' (Solana) + m/44'/60'/0'/0/0 (EVM) once the
@@ -407,15 +443,24 @@ export class AiFinPayAgent {
   }
 
   /**
-   * Legacy: load the Solana side from an existing keypair, then either
-   * generate a fresh EVM key or import one with `attachEvmKey`.
+   * Legacy: load the Solana side from an existing keypair. The EVM key is
+   * derived deterministically from the Solana secret's 32-byte seed
+   * (domain-separated SHA-256, same path as `fromSeed`) unless an explicit
+   * `opts.evmPrivateKey` is provided.
+   *
+   * Why deterministic: a random key here would change the EVM address on
+   * every process restart — anything sent to the previous address becomes
+   * unrecoverable because the key was never persisted or printed. With
+   * derivation, the same AIFINPAY_AGENT_SECRET always reproduces the same
+   * EVM address (this is what the MCP server relies on).
    */
   static async fromSolanaSecret(
     secretB58: string,
     opts: AiFinPayAgentOptions = {},
   ): Promise<AiFinPayAgent> {
     const inner = Agent.fromSecretB58(secretB58, opts);
-    const evmKey = opts.evmPrivateKey ?? generatePrivateKey();
+    const evmKey = opts.evmPrivateKey
+      ?? (("0x" + bytesToHex(crypto32(inner.secretKey.subarray(0, 32)))) as `0x${string}`);
     const evmAccount = privateKeyToAccount(evmKey);
     return new AiFinPayAgent(inner, evmAccount, opts);
   }
@@ -449,6 +494,100 @@ export class AiFinPayAgent {
       throw new ProviderUnknownError(`Provider "${name}" not in registry ${this.registryUrl}`);
     }
     return hit;
+  }
+
+  // ── Network directory ─────────────────────────────────────────────────────
+
+  /**
+   * Publish this agent to the public AiFinPay network so other agents can
+   * discover and call it. Self-sovereign: proves control of the EVM address by
+   * signing a one-time nonce with the agent's own key (EIP-191) — no partner
+   * account needed.
+   */
+  async register(opts: {
+    name:          string;
+    endpoint:      string;
+    description?:  string;
+    capabilities?: string[];
+    pricing?:      { perCall: number; currency?: string };
+  }): Promise<NetworkAgent> {
+    const base = this.inner.baseUrl;
+    const addr = this.evmAddress.toLowerCase();
+
+    const nonce = await this.networkNonce();
+    const message = `AiFinPay-network-publish:polygon:${addr}:${nonce}`;
+    const signature = await this.evmAccount.signMessage({ message });
+
+    const r = await fetch(`${base}/api/network/agents/${addr}/publish`, {
+      method:  "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name:         opts.name,
+        description:  opts.description ?? null,
+        endpoint:     opts.endpoint,
+        capabilities: opts.capabilities ?? [],
+        pricing:      opts.pricing
+          ? { per_call: opts.pricing.perCall, currency: opts.pricing.currency ?? "USDC" }
+          : null,
+        nonce,
+        signature,
+      }),
+    });
+    const j = (await r.json().catch(() => ({}))) as { ok?: boolean; agent?: NetworkAgent; error?: string };
+    if (!r.ok || !j.ok || !j.agent) {
+      throw new AiFinPayError(`network publish failed: ${j.error ?? r.status}`);
+    }
+    return j.agent;
+  }
+
+  /** Remove this agent from the public network directory (same signature proof). */
+  async unregister(): Promise<void> {
+    const base = this.inner.baseUrl;
+    const addr = this.evmAddress.toLowerCase();
+    const nonce = await this.networkNonce();
+    const message = `AiFinPay-network-unpublish:polygon:${addr}:${nonce}`;
+    const signature = await this.evmAccount.signMessage({ message });
+    const r = await fetch(`${base}/api/network/agents/${addr}/unpublish`, {
+      method:  "POST",
+      headers: { "content-type": "application/json" },
+      body:    JSON.stringify({ nonce, signature }),
+    });
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      throw new AiFinPayError(`network unpublish failed: ${j.error ?? r.status}`);
+    }
+  }
+
+  /**
+   * Search the public network for agents advertising a capability or matching a
+   * free-text query. Pass a bare string to search by capability
+   * (`agent.search("weather")`) or an object for finer control. Returns the
+   * directory entries; invoking one (pay + call) lands in a later release.
+   */
+  async search(
+    query: string | { capability?: string; q?: string; limit?: number },
+  ): Promise<NetworkAgent[]> {
+    const base = this.inner.baseUrl;
+    const params = new URLSearchParams();
+    if (typeof query === "string") {
+      params.set("capability", query);
+    } else {
+      if (query.capability) params.set("capability", query.capability);
+      if (query.q)          params.set("q", query.q);
+      if (query.limit)      params.set("limit", String(query.limit));
+    }
+    const r = await fetch(`${base}/api/network/agents?${params.toString()}`);
+    if (!r.ok) throw new AiFinPayError(`network search ${base} → ${r.status}`);
+    const j = (await r.json()) as { agents?: NetworkAgent[] };
+    return j.agents ?? [];
+  }
+
+  private async networkNonce(): Promise<string> {
+    const r = await fetch(`${this.inner.baseUrl}/api/network/nonce`);
+    if (!r.ok) throw new AiFinPayError(`network nonce → ${r.status}`);
+    const { nonce } = (await r.json()) as { nonce: string };
+    if (!nonce) throw new AiFinPayError("network nonce: empty response");
+    return nonce;
   }
 
   // ── Budget caps ─────────────────────────────────────────────────────────
@@ -492,6 +631,36 @@ export class AiFinPayAgent {
    */
   getSpend24h(): number {
     return this.spend24h.total24h();
+  }
+
+  /**
+   * Sanity-check the USD estimate of an on-chain challenge amount against
+   * the declared cost and the per-call cap BEFORE signing the tx.
+   *
+   * The estimate uses env-priced MATIC/SOL (AIFINPAY_MATIC_USD /
+   * AIFINPAY_SOL_USD — same stopgap as balance()), so it is approximate.
+   * A 2x + $0.05 tolerance absorbs oracle drift while still catching the
+   * dangerous case: a bridge that quotes $0.01 in the registry and then
+   * demands 100x in the 402 challenge.
+   *
+   * Returns false (skip) instead of throwing when on_limit_exceeded="skip".
+   */
+  private guardChallengeAmount(estUsd: number, declaredCost: number, providerName: string): boolean {
+    if (!Number.isFinite(estUsd) || estUsd <= 0) return true; // can't estimate — don't block
+    const limits: number[] = [];
+    if (declaredCost > 0) limits.push(Math.max(declaredCost * 2, declaredCost + 0.05));
+    if (this.budgetCaps.per_call_usd !== undefined) limits.push(this.budgetCaps.per_call_usd);
+    if (!limits.length) return true; // no cap declared anywhere — caller opted out
+    const limit = Math.min(...limits);
+    if (estUsd <= limit) return true;
+    const err = new BudgetCapExceededError(
+      "per_call",
+      `bridge ${providerName} challenge demands ≈$${estUsd.toFixed(4)} on-chain, ` +
+        `above the allowed $${limit.toFixed(4)} (declared cost/per-call cap). ` +
+        `Set AIFINPAY_MATIC_USD / AIFINPAY_SOL_USD for a tighter estimate.`,
+    );
+    if ((this.budgetCaps.on_limit_exceeded ?? "throw") === "skip") return false;
+    throw err;
   }
 
   // ── Routing — chain selection ───────────────────────────────────────────
@@ -664,7 +833,10 @@ export class AiFinPayAgent {
   async call(opts: CallOptions): Promise<Response | null> {
     const provider = await this.resolveProvider(opts.provider);
     const chain    = this.pickChain(provider, opts);
-    const cost     = opts.cost ?? provider.price_usd;
+    // Registry may carry price_usd: null — normalise to a finite number so a
+    // null/NaN cost can't poison the SpendTracker and silently disable caps.
+    const rawCost  = opts.cost ?? provider.price_usd;
+    const cost     = typeof rawCost === "number" && Number.isFinite(rawCost) ? rawCost : 0;
 
     const withinBudget = this.checkBudget(cost);
     if (!withinBudget) return null;
@@ -692,7 +864,9 @@ export class AiFinPayAgent {
       method:  opts.method ?? "POST",
       headers: { "content-type": "application/json", ...extraHeaders },
       body:    opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      signal:  opts.signal,
+      // CallOptions.timeoutMs was previously declared but never applied.
+      signal:  opts.signal
+        ?? (opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined),
     });
 
     // 1. Initial unauthenticated POST → expect 402 challenge from the bridge.
@@ -701,7 +875,7 @@ export class AiFinPayAgent {
 
     if (initialResp.status !== 402) {
       // Bridge didn't ask for payment — pass response through unchanged.
-      this.spend24h.add(cost);
+      // Nothing was paid, so the call does NOT count against budget caps.
       if (this.telemetry) this.reportTelemetry({ kind: "call", provider: provider.name, chain, cost, free: true });
       return initialResp;
     }
@@ -723,6 +897,16 @@ export class AiFinPayAgent {
         );
       }
       const ps = challenge.pay_solana;
+      // Guard: the bridge controls the challenge — verify the demanded
+      // amount is in the same ballpark as the declared cost / caps before
+      // signing anything. Stops a misquoting bridge from draining the agent.
+      {
+        const lamports = Number(ps.total_lamports ?? ps.merchant_amount_lamports);
+        const solUsd   = parseFloat(process.env.AIFINPAY_SOL_USD ?? "200");
+        const estUsd   = (Number.isFinite(lamports) ? lamports / 1e9 : 0) * solUsd;
+        const guarded  = this.guardChallengeAmount(estUsd, cost, provider.name);
+        if (!guarded) return null;
+      }
       const solTxSig = await this.submitSolanaB2BPayWithSplit(ps);
       const paidResp = await this.inner.fetchImpl(fullUrl, buildInit({
         "x-solana-tx": solTxSig,
@@ -753,7 +937,24 @@ export class AiFinPayAgent {
     }
     const pm = challenge.pay_matic;
 
+    // Guard: same ballpark check as the Solana branch — never sign for an
+    // amount wildly above the declared cost / per-call cap.
+    {
+      const wei      = Number(pm.total_wei);
+      const maticUsd = parseFloat(process.env.AIFINPAY_MATIC_USD ?? "0.70");
+      const estUsd   = (Number.isFinite(wei) ? wei / 1e18 : 0) * maticUsd;
+      const guarded  = this.guardChallengeAmount(estUsd, cost, provider.name);
+      if (!guarded) return null;
+    }
+
     // 2. Submit B2BSplitter.payMatic on Polygon mainnet.
+    // ipCreator routing: prefer the challenge's explicit ip_creator; else
+    // route the royalty slot to the splitter's treasury (mirrors the Solana
+    // branch). Passing address(0) would skip the transfer and permanently
+    // strand the 1bp inside B2BSplitter — the contract has no sweep function.
+    const ipCreator = (pm.ip_creator as `0x${string}` | undefined)
+      ?? await this.splitterTreasury(pm.splitter as `0x${string}`)
+      ?? "0x0000000000000000000000000000000000000000";
     const { publicClient, walletClient } = this.polygonClients();
     const txHash = await walletClient.writeContract({
       address:      pm.splitter as `0x${string}`,
@@ -761,7 +962,7 @@ export class AiFinPayAgent {
       functionName: "payMatic",
       args: [
         pm.merchant_wallet as `0x${string}`,
-        "0x0000000000000000000000000000000000000000",
+        ipCreator,
         pm.order_id,
       ],
       value: BigInt(pm.total_wei),
@@ -923,8 +1124,9 @@ export class AiFinPayAgent {
   }
 
   private async fetchSolanaNative(): Promise<number> {
-    // Use raw JSON-RPC to avoid pulling @solana/web3.js as a dep.
-    const rpc = process.env.AIFINPAY_SOLANA_RPC || "https://api.mainnet.solana.com";
+    // Raw JSON-RPC; honours the constructor's solanaRpc option (previously
+    // re-read env here with a different default endpoint).
+    const rpc = this.solanaRpc;
     const r = await this.inner.fetchImpl(rpc, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -949,7 +1151,7 @@ export class AiFinPayAgent {
    * non-blocking introspection call.
    */
   private async fetchSolanaUsdc(): Promise<number> {
-    const rpc = process.env.AIFINPAY_SOLANA_RPC || "https://api.mainnet.solana.com";
+    const rpc = this.solanaRpc;
     try {
       const r = await this.inner.fetchImpl(rpc, {
         method: "POST",
@@ -979,6 +1181,28 @@ export class AiFinPayAgent {
       return total;
     } catch {
       return 0; // never block balance() on Solana RPC issues
+    }
+  }
+
+  // Cache: splitter address → treasury address (constant per deployment).
+  private splitterTreasuryCache = new Map<string, `0x${string}`>();
+
+  /** Read + cache B2BSplitter.treasury(). Returns null on RPC failure. */
+  private async splitterTreasury(splitter: `0x${string}`): Promise<`0x${string}` | null> {
+    const cached = this.splitterTreasuryCache.get(splitter.toLowerCase());
+    if (cached) return cached;
+    try {
+      const { publicClient } = this.polygonClients();
+      const treasury = await publicClient.readContract({
+        address:      splitter,
+        abi:          SPLITTER_TREASURY_ABI,
+        functionName: "treasury",
+      }) as `0x${string}`;
+      if (!treasury || treasury === "0x0000000000000000000000000000000000000000") return null;
+      this.splitterTreasuryCache.set(splitter.toLowerCase(), treasury);
+      return treasury;
+    } catch {
+      return null;
     }
   }
 
@@ -1059,15 +1283,10 @@ function bytesToHex(b: Uint8Array): string {
  * before audit-grade derivation lands.
  */
 function crypto32(seed: Uint8Array): Uint8Array {
-  // Lazy require to avoid pulling node:crypto into bundlers that don't need it.
-  const c = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto;
-  if (c?.subtle) {
-    // Browser / modern Node — but subtle is async, and we're sync here.
-    // Fall through to the node:crypto path.
-  }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeCrypto = require("node:crypto");
-  const h = nodeCrypto.createHash("sha256");
+  // Must stay sync (constructors call it). Uses the createHash imported at
+  // the top of this file — a bare `require()` is a ReferenceError here
+  // because this package ships as ESM ("type": "module").
+  const h = createHash("sha256");
   h.update("aifinpay:evm:v1\0");
   h.update(seed);
   return new Uint8Array(h.digest());

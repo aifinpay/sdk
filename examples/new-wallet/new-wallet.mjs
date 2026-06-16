@@ -34,7 +34,7 @@ process.stdout.write("\n");
 process.stdout.write("Next steps:\n");
 process.stdout.write("  1. Save the privateKey somewhere safe (e.g. AGENT_PK env var).\n");
 process.stdout.write("  2. Fund the address with ~0.5 POL on Polygon (≈ $0.05) to cover a few calls.\n");
-process.stdout.write("  3. Register the address at https://dashboard.aifinpay.company/partners\n");
+process.stdout.write("  3. Register the address at https://dashboard.aifinpay.io/partners\n");
 process.stdout.write("     so on-chain activity rolls up in your workspace.\n");
 process.stdout.write("  4. Run your agent — `new AiFinPayAgent({privateKey: process.env.AGENT_PK})`\n");
 process.stdout.write("     then `agent.call({provider:\"io-net\", body:{...}})`.\n");

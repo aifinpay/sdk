@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
-  { name = "CoinSecurities (SECCO)", email = "contact@aifinpay.company" },
+  { name = "CoinSecurities (SECCO)", email = "contact@aifinpay.io" },
 ]
 keywords = [
   "ai-agent", "ai-agents", "agentic-ai", "autonomous-agents",

@@ -71,7 +71,7 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 // the transferWithAuthorization (ERC-3009) flow without the agent
 // broadcasting a tx themselves.
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
-const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/exa/search";
+const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.io/exa/search";
 
 // ── Solana payment option (atomic b2b_pay_with_split, live 2026-05-18) ──
 const SOLANA_RPC             = process.env.SOLANA_RPC             || "https://api.mainnet-beta.solana.com";
@@ -82,7 +82,7 @@ const BRIDGE_MERCHANT_SOLANA = process.env.BRIDGE_MERCHANT_SOLANA || "";
 const PRICE_LAMPORTS         = process.env.PRICE_LAMPORTS         || "50000";
 
 // Optional: report failures + settlements to operator for the internal admin
-// dashboard. Set to e.g. https://aifinpay.company in prod.
+// dashboard. Set to e.g. https://aifinpay.io in prod.
 const OPERATOR_URL           = process.env.OPERATOR_URL || "";
 
 async function reportToOperator(kind, fields) {

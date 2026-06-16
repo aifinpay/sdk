@@ -106,7 +106,7 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 // the transferWithAuthorization (ERC-3009) flow without the agent
 // broadcasting a tx themselves.
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
-const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/gcore/chat/completions";
+const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.io/gcore/chat/completions";
 
 if (!GCORE_API_URL && GCORE_DEPLOYMENTS.length === 0) {
   console.error(`[${SERVICE_NAME}] FATAL: configure at least one upstream. Set GCORE_API_URL (single-model) or GCORE_DEPLOYMENTS (multi-model JSON array).`);

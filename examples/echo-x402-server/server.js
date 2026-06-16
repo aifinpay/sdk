@@ -14,7 +14,7 @@
 //      → 200 if Seat is live; 402 otherwise.
 //
 // Run:
-//   AIFINPAY_API=https://aifinpay.company PORT=3000 node server.js
+//   AIFINPAY_API=https://aifinpay.io PORT=3000 node server.js
 // ──────────────────────────────────────────────────────────────────────────
 import crypto from "node:crypto";
 import express from "express";
@@ -22,7 +22,7 @@ import nacl from "tweetnacl";
 import bs58 from "bs58";
 
 const PORT          = process.env.PORT          || 3000;
-const AIFINPAY_API  = process.env.AIFINPAY_API  || "https://aifinpay.company";
+const AIFINPAY_API  = process.env.AIFINPAY_API  || "https://aifinpay.io";
 const PRICE_USD     = process.env.PRICE_USD     || "0.001";
 const SERVICE_NAME  = process.env.SERVICE_NAME  || "echo-x402";
 
@@ -92,7 +92,7 @@ function challenge402(res, message = "Payment Required") {
     "x-nonce-expires": new Date(Date.now() + NONCE_TTL_MS).toISOString(),
     price_usd: PRICE_USD,
     instructions: [
-      "1. Reserve a Seat PDA at https://aifinpay.company",
+      "1. Reserve a Seat PDA at https://aifinpay.io",
       `2. Sign SHA-256("AiFinPay-x402:${nonce}:<your_pubkey>") with Ed25519`,
       "3. Resend with x-agent-pubkey + x-nonce + x-signature headers",
     ],

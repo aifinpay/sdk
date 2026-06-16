@@ -13,7 +13,7 @@
 // Run:
 //   PORT=3010 node server.js
 //
-// Catalog URL: https://mcp.aifinpay.company/mcp
+// Catalog URL: https://mcp.aifinpay.io/mcp
 // ──────────────────────────────────────────────────────────────────────────
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -23,7 +23,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "@aifinpay/mcp";
 
 const PORT = process.env.PORT || 3010;
-const PUBLIC_URL = process.env.MCP_PUBLIC_URL || "https://mcp.aifinpay.company/mcp";
+const PUBLIC_URL = process.env.MCP_PUBLIC_URL || "https://mcp.aifinpay.io/mcp";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -59,11 +59,11 @@ app.get("/", (_req, res) =>
       { name: "quote_split",   desc: "Compute the atomic 99/1 fee breakdown." },
     ],
     links: {
-      site:    "https://aifinpay.company",
-      docs:    "https://aifinpay.company/docs",
+      site:    "https://aifinpay.io",
+      docs:    "https://aifinpay.io/docs",
       sdk:     "https://github.com/AiFinPay/sdk",
-      status:  "https://aifinpay.company/status",
-      network: "https://aifinpay.company/network",
+      status:  "https://aifinpay.io/status",
+      network: "https://aifinpay.io/network",
     },
   }),
 );

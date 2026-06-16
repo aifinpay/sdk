@@ -91,8 +91,8 @@ except ImportError as e:  # pragma: no cover
 
 # ── Constants ───────────────────────────────────────────────────────────────
 
-# Canonical domain is aifinpay.io (aifinpay.company 301-redirects there,
-# which silently downgrades POST → GET in requests — never rely on it).
+# Canonical domain is aifinpay.io. The legacy aifinpay.company host is
+# fully retired (DNS removed) — do not use it.
 DEFAULT_REGISTRY_URL = "https://api.aifinpay.io/api/providers"
 DEFAULT_POLYGON_RPC  = "https://polygon.drpc.org"
 DEFAULT_SOLANA_RPC   = "https://api.mainnet-beta.solana.com"

@@ -5,8 +5,8 @@ import { AiFinPayError, FundingTimeoutError, X402Error } from "./errors.js";
 import { detectFacilitator } from "./facilitators/detect.js";
 import type { PayOptions } from "./facilitators/base.js";
 
-// Canonical domain is aifinpay.io (aifinpay.company 301-redirects there,
-// which silently downgrades POST → GET in fetch — never rely on it).
+// Canonical domain is aifinpay.io. The legacy aifinpay.company host is
+// fully retired (DNS removed) — do not use it.
 const DEFAULT_BASE_URL = "https://aifinpay.io";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const SDK_UA = "aifinpay-agent-node/0.3.0";

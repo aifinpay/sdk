@@ -63,7 +63,7 @@ const USDT_ADDRESS           = process.env.USDT_POLYGON           || "0xc2132D05
 // the transferWithAuthorization (ERC-3009) flow without the agent
 // broadcasting a tx themselves.
 const X402_FACILITATOR_URL   = process.env.X402_FACILITATOR_URL   || "https://x402.polygon.technology";
-const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.company/venice/chat/completions";
+const X402_RESOURCE_URL      = process.env.X402_RESOURCE_URL      || "https://bridge.aifinpay.io/venice/chat/completions";
 
 // ── Solana payment option (atomic b2b_pay_with_split, live 2026-05-18) ──
 const SOLANA_RPC             = process.env.SOLANA_RPC             || "https://api.mainnet-beta.solana.com";

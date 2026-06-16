@@ -33,9 +33,9 @@ semver-stable `1.0.0` on PyPI and npm under the default (`latest`) tag.
 ### Changed
 - Install commands no longer require a prerelease tag:
   `pip install aifinpay-agent` and `npm install @aifinpay/agent`.
-- All documentation and example endpoints point at the canonical
-  `aifinpay.io` domain (the legacy `aifinpay.company` host is retired;
-  email remains on `@aifinpay.company`).
+- All documentation, example endpoints, and contact email moved to the
+  canonical `aifinpay.io` domain. The legacy `aifinpay.company` host is
+  fully retired (DNS removed).
 
 ### Notes
 - Semver guarantees apply from `1.0.0`: no breaking changes without a

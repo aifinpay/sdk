@@ -20,8 +20,8 @@ from .errors import (
 )
 from .facilitators import PayOptions, detect_facilitator
 
-# Canonical domain is aifinpay.io (aifinpay.company 301-redirects there,
-# which silently downgrades POST → GET in requests — never rely on it).
+# Canonical domain is aifinpay.io. The legacy aifinpay.company host is
+# fully retired (DNS removed) — do not use it.
 DEFAULT_BASE_URL = "https://aifinpay.io"
 DEFAULT_TIMEOUT = 30  # seconds
 

@@ -55,7 +55,7 @@ if __name__ == "__main__":
     out = executor.invoke({
         "input": (
             "Buy a one-sentence completion: payable_fetch "
-            "https://bridge.aifinpay.company/io-net/chat/completions with body "
+            "https://bridge.aifinpay.io/io-net/chat/completions with body "
             "{\"model\":\"meta-llama/Llama-3.3-70B-Instruct\","
             "\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence: what is x402?\"}]}. "
             "Then summarize the result."

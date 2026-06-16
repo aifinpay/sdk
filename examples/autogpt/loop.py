@@ -50,14 +50,14 @@ def pick_topic(openai: OpenAI) -> str:
 
 def paid_search(agent: PayAgent, query: str) -> str:
     return agent.pay(
-        "https://bridge.aifinpay.company/exa/search",
+        "https://bridge.aifinpay.io/exa/search",
         body={"query": query, "numResults": 3},
     ).text
 
 
 def paid_inference(agent: PayAgent, prompt: str) -> str:
     resp = agent.pay(
-        "https://bridge.aifinpay.company/io-net/chat/completions",
+        "https://bridge.aifinpay.io/io-net/chat/completions",
         body={
             "model": "meta-llama/Llama-3.3-70B-Instruct",
             "messages": [{"role": "user", "content": prompt}],

@@ -58,7 +58,7 @@ class Agent:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._session = requests.Session()
-        self._session.headers["User-Agent"] = "aifinpay-agent-py/0.3.0a2"
+        self._session.headers["User-Agent"] = "aifinpay-agent-py/1.0.0"
 
     # ── Constructors ────────────────────────────────────────────────────────
 

@@ -2,7 +2,7 @@
 name: aifinpay
 description: Pay any HTTP API on behalf of an AI agent with one line of code. Settles on-chain in stablecoins (USDC/USDT) or native tokens on Polygon and Solana mainnet. Non-custodial.
 license: MIT
-homepage: https://aifinpay.company
+homepage: https://aifinpay.io
 repository: https://github.com/AiFinPay/sdk
 when_to_use: |
   Invoke this skill whenever the agent needs to call a paid HTTP API
@@ -25,8 +25,8 @@ touches funds at any point.
 Pick one:
 
 ```bash
-pip install aifinpay-agent --pre       # Python
-npm install @aifinpay/agent@alpha       # Node / TypeScript
+pip install aifinpay-agent       # Python
+npm install @aifinpay/agent       # Node / TypeScript
 npx @aifinpay/mcp                       # MCP server (Claude Desktop / Cursor / Windsurf)
 ```
 
@@ -39,7 +39,7 @@ agent = Agent.new()
 print("Fund this address with MATIC + USDC:", agent.address)
 
 resp = agent.pay(
-    "https://bridge.aifinpay.company/io-net/chat/completions",
+    "https://bridge.aifinpay.io/io-net/chat/completions",
     body={"model": "meta-llama/Llama-3.3-70B-Instruct",
           "messages": [{"role": "user", "content": "Hello"}]},
 )
@@ -60,7 +60,7 @@ const agent = Agent.new();
 console.log("Fund this address:", agent.address);
 
 const res = await agent.pay(
-  "https://bridge.aifinpay.company/io-net/chat/completions",
+  "https://bridge.aifinpay.io/io-net/chat/completions",
   { body: { model: "meta-llama/Llama-3.3-70B-Instruct",
             messages: [{ role: "user", content: "Hello" }] } },
 );
@@ -88,7 +88,7 @@ The model now has five tools: `payable_fetch`, `agent_address`,
 
 Ask the model to *use `agent_address` to show me your wallet address*,
 fund it, then ask it to *use `payable_fetch` on
-https://bridge.aifinpay.company/io-net/chat/completions with body { … }*
+https://bridge.aifinpay.io/io-net/chat/completions with body { … }*
 — it will settle on-chain and return the response.
 
 ## How a payment actually settles
@@ -113,12 +113,12 @@ funds at any point.
 |---|---|---|
 | `AIFINPAY_AGENT_SECRET` | random | persistent base58 Ed25519 secret |
 | `AIFINPAY_MAX_USD` | `0.10` | hard cap per `payable_fetch` call |
-| `AIFINPAY_API` | `https://api.aifinpay.company` | API base URL |
+| `AIFINPAY_API` | `https://api.aifinpay.io` | API base URL |
 | `AIFINPAY_CHAIN` | `auto` | `polygon`, `solana`, or `auto` |
 
 ## Live partner bridges
 
-`bridge.aifinpay.company/{io-net,exa,venice}/` — production HTTP 402
+`bridge.aifinpay.io/{io-net,exa,venice}/` — production HTTP 402
 proxies in front of three providers. Hitting any of them without a
 payment header returns the 402 challenge inline so the SDK can settle
 and retry.
@@ -141,11 +141,11 @@ and retry.
 
 ## Links
 
-- Site: https://aifinpay.company
-- Quick start: https://aifinpay.company/quickstart
-- Live demo: https://aifinpay.company/demo/agent-buys-inference
-- System status: https://aifinpay.company/status
+- Site: https://aifinpay.io
+- Quick start: https://aifinpay.io/quickstart
+- Live demo: https://aifinpay.io/demo/agent-buys-inference
+- System status: https://aifinpay.io/status
 - SDK source: https://github.com/AiFinPay/sdk
-- Manifesto: https://api.aifinpay.company/manifesto.json
-- x402 discovery: https://api.aifinpay.company/.well-known/x402.json
+- Manifesto: https://api.aifinpay.io/manifesto.json
+- x402 discovery: https://api.aifinpay.io/.well-known/x402.json
 - MCP client matrix: https://github.com/AiFinPay/sdk/blob/main/MCP_CONFIG.md

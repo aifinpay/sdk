@@ -1,7 +1,7 @@
 {
   "$schema": "https://modelcontextprotocol.io/schemas/server.json",
   "name": "aifinpay",
-  "version": "0.1.0-alpha.8",
+  "version": "1.0.0",
   "description": "Stripe for AI agents. Pay for any HTTP API in stablecoins or native tokens on Polygon and Solana mainnet with one MCP call. Non-custodial, on-chain settlement.",
   "vendor": "CoinSecurities (SECCO)",
   "license": "MIT",

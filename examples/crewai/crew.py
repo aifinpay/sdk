@@ -21,7 +21,7 @@ class PaidSearchTool(BaseTool):
 
     def _run(self, query: str) -> str:
         resp = pay.pay(
-            "https://bridge.aifinpay.company/exa/search",
+            "https://bridge.aifinpay.io/exa/search",
             body={"query": query, "numResults": 5},
         )
         return resp.text
@@ -33,7 +33,7 @@ class PaidInferenceTool(BaseTool):
 
     def _run(self, prompt: str) -> str:
         resp = pay.pay(
-            "https://bridge.aifinpay.company/io-net/chat/completions",
+            "https://bridge.aifinpay.io/io-net/chat/completions",
             body={
                 "model": "meta-llama/Llama-3.3-70B-Instruct",
                 "messages": [{"role": "user", "content": prompt}],

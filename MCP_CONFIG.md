@@ -139,7 +139,7 @@ In any MCP-aware client, ask the model:
 A fresh agent returns a Polygon EVM address. Fund it with a few cents of
 MATIC + USDC, then ask:
 
-> Use `payable_fetch` on `https://bridge.aifinpay.company/io-net/chat/completions` with body `{"model":"meta-llama/Llama-3.3-70B-Instruct","messages":[{"role":"user","content":"Hello"}]}`.
+> Use `payable_fetch` on `https://bridge.aifinpay.io/io-net/chat/completions` with body `{"model":"meta-llama/Llama-3.3-70B-Instruct","messages":[{"role":"user","content":"Hello"}]}`.
 
 The model autonomously pays the 402, fetches the inference, and returns
 the assistant message. The tx hash is in the tool result.

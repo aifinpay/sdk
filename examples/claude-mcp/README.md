@@ -38,7 +38,7 @@ Click the hammer icon in the chat input. You should see five tools:
 
 After funding:
 
-> **You:** Use `payable_fetch` on `https://bridge.aifinpay.company/io-net/chat/completions`
+> **You:** Use `payable_fetch` on `https://bridge.aifinpay.io/io-net/chat/completions`
 > with body `{"model":"meta-llama/Llama-3.3-70B-Instruct","messages":[{"role":"user","content":"Hello"}]}`.
 >
 > **Claude:** *(tool call, settles 402 on-chain, retries, returns response)*

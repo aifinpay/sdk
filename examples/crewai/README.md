@@ -6,7 +6,7 @@ search and inference; the Editor synthesizes.
 ## Setup
 
 ```bash
-pip install aifinpay-agent --pre crewai crewai-tools
+pip install aifinpay-agent crewai crewai-tools
 export OPENAI_API_KEY=sk-...
 python crew.py
 ```

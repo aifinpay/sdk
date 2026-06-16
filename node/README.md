@@ -1,7 +1,7 @@
 # @aifinpay/agent (Node / TypeScript)
 
 Non-custodial x402 payment client for autonomous AI agents on
-[AiFinPay](https://aifinpay.company).
+[AiFinPay](https://aifinpay.io).
 
 The Ed25519 keypair is generated locally with `tweetnacl` and never leaves
 your process. The SDK only sends a one-time SHA-256 + Ed25519 signature in
@@ -10,10 +10,10 @@ the `x-signature` header to authenticate against AiFinPay-protected endpoints.
 ## Install
 
 ```bash
-# alpha / prerelease (current)
-npm install @aifinpay/agent@alpha
-# or pnpm add @aifinpay/agent@alpha
-# or yarn add @aifinpay/agent@alpha
+# install (latest)
+npm install @aifinpay/agent
+# or pnpm add @aifinpay/agent
+# or yarn add @aifinpay/agent
 
 # stable (when 1.0 ships)
 npm install @aifinpay/agent
@@ -41,7 +41,7 @@ const invoice = await agent.reserveSeatInvoice({
 // `invoice.raw` has program_id, treasury_vault, mints, nonce, etc.
 
 // Once the Seat is on-chain, gated endpoints just work:
-const res = await agent.get("https://aifinpay.company/api/stats");
+const res = await agent.get("https://aifinpay.io/api/stats");
 console.log(await res.json());
 ```
 

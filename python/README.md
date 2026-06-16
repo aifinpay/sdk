@@ -16,8 +16,8 @@ the right auth payload (three-headers for AiFinPay, base64
 ## Install
 
 ```bash
-# alpha / prerelease (current)
-pip install aifinpay-agent --pre
+# install (latest)
+pip install aifinpay-agent
 
 # stable (when 1.0 ships)
 pip install aifinpay-agent
@@ -43,7 +43,7 @@ print("Invoice:", invoice.raw)
 # or solana-py — the invoice contains program_id, treasury_vault, mints, etc.
 
 # Generic x402 — auto-detects facilitator, signs, retries
-resp = agent.pay("https://aifinpay.company/api/stats")
+resp = agent.pay("https://aifinpay.io/api/stats")
 print(resp.json())
 
 # Pay any third-party x402 endpoint (e.g. Coinbase x402-protected API)

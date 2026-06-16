@@ -66,7 +66,7 @@ def run(user_msg: str) -> str:
 
 if __name__ == "__main__":
     answer = run(
-        "Use payable_fetch to call https://bridge.aifinpay.company/io-net/chat/completions "
+        "Use payable_fetch to call https://bridge.aifinpay.io/io-net/chat/completions "
         "with {\"model\":\"meta-llama/Llama-3.3-70B-Instruct\",\"messages\":[{\"role\":\"user\",\"content\":\"In one sentence: what is x402?\"}]}, "
         "then summarize the assistant's reply."
     )

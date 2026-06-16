@@ -1,7 +1,7 @@
 name: aifinpay
 displayName: AiFinPay
 description: Stripe for AI agents. Pay for any HTTP API in stablecoins or native tokens on Polygon and Solana mainnet with one MCP call. Non-custodial, on-chain settlement.
-version: 0.1.0-alpha.8
+version: 1.0.0
 license: MIT
 homepage: https://aifinpay.io
 repository: https://github.com/AiFinPay/sdk

@@ -14,7 +14,7 @@ There are three paths. Pick whichever matches what you're building:
 ## Path 1 — Python SDK
 
 ```bash
-pip install aifinpay-agent --pre
+pip install aifinpay-agent
 ```
 
 ```python
@@ -28,7 +28,7 @@ print("Fund this address with a few cents of MATIC:", agent.address)
 # Once funded, this autonomously settles the 402 challenge on-chain and
 # returns the gated response body.
 resp = agent.pay(
-    "https://bridge.aifinpay.company/io-net/chat/completions",
+    "https://bridge.aifinpay.io/io-net/chat/completions",
     body={"model": "meta-llama/Llama-3.3-70B-Instruct",
           "messages": [{"role": "user", "content": "Hello"}]},
 )
@@ -39,7 +39,7 @@ print("tx hash:", resp.headers.get("x-payment-receipt"))
 ## Path 2 — Node / TypeScript SDK
 
 ```bash
-npm install @aifinpay/agent@alpha
+npm install @aifinpay/agent
 ```
 
 ```ts
@@ -49,7 +49,7 @@ const agent = Agent.new();
 console.log("Fund this address:", agent.address);
 
 const res = await agent.pay(
-  "https://bridge.aifinpay.company/io-net/chat/completions",
+  "https://bridge.aifinpay.io/io-net/chat/completions",
   { body: { model: "meta-llama/Llama-3.3-70B-Instruct",
             messages: [{ role: "user", content: "Hello" }] } },
 );
@@ -135,6 +135,6 @@ custodian holds funds at any point.
 
 ## Next
 
-- Full API surface: [`https://aifinpay.company/docs`](https://aifinpay.company/docs)
-- x402 discovery doc: [`https://api.aifinpay.company/.well-known/x402.json`](https://api.aifinpay.company/.well-known/x402.json)
+- Full API surface: [`https://aifinpay.io/docs`](https://aifinpay.io/docs)
+- x402 discovery doc: [`https://api.aifinpay.io/.well-known/x402.json`](https://api.aifinpay.io/.well-known/x402.json)
 - Issues / questions: [GitHub Issues](https://github.com/AiFinPay/sdk/issues)

@@ -1,7 +1,7 @@
 ## @aifinpay/mcp-http
 
 Streamable HTTP transport wrapper for [`@aifinpay/mcp`](../mcp). Public
-endpoint at **`https://mcp.aifinpay.company/mcp`** so catalogs that
+endpoint at **`https://mcp.aifinpay.io/mcp`** so catalogs that
 require an HTTP URL (Smithery, mcp.so, LobeHub MCP) can list us.
 
 For local Claude Desktop / Cursor / Windsurf use, stick with the stdio
@@ -38,9 +38,9 @@ curl -X POST http://localhost:3010/mcp \
 
 | Catalog | URL to submit | Status |
 |---|---|---|
-| Smithery | `https://mcp.aifinpay.company/mcp` | submit via `https://smithery.ai/new` (HTTP type) |
-| mcp.so | `https://mcp.aifinpay.company/mcp` | submit via `https://mcp.so/submit` |
-| LobeHub | `https://mcp.aifinpay.company/mcp` | submit via LobeHub MCP catalog |
+| Smithery | `https://mcp.aifinpay.io/mcp` | submit via `https://smithery.ai/new` (HTTP type) |
+| mcp.so | `https://mcp.aifinpay.io/mcp` | submit via `https://mcp.so/submit` |
+| LobeHub | `https://mcp.aifinpay.io/mcp` | submit via LobeHub MCP catalog |
 
 Drafts live at `oracle-financial-hub-59/docs/launch/{smithery,mcp.so,lobehub-mcp}-submission.*`.
 
@@ -71,6 +71,6 @@ calls from web-only MCP clients.
 ### Production
 
 Deployed on the operator VPS at port 3010, fronted by nginx vhost
-`mcp.aifinpay.company`. systemd unit at
+`mcp.aifinpay.io`. systemd unit at
 `/etc/systemd/system/mcp-http.service` (see
 `docs/mcp-http-deploy.md` in the oracle repo for the runbook).

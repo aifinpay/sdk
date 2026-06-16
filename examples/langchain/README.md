@@ -6,7 +6,7 @@ Expose `agent.pay()` as a LangChain `BaseTool`. Any LangChain agent
 ## Setup
 
 ```bash
-pip install aifinpay-agent --pre langchain langchain-openai
+pip install aifinpay-agent langchain langchain-openai
 export OPENAI_API_KEY=sk-...
 python agent.py
 ```

@@ -35,7 +35,7 @@ node -e "import('viem/accounts').then(({generatePrivateKey, privateKeyToAccount}
 2. Fund the address with ~0.5 POL on Polygon (≈ $0.05) — covers a few
    x402 calls plus gas.
 3. Register the address at
-   [dashboard.aifinpay.company/partners](https://dashboard.aifinpay.company/partners)
+   [dashboard.aifinpay.io/partners](https://dashboard.aifinpay.io/partners)
    so on-chain activity is attributed to your workspace.
 4. Run your agent:
 

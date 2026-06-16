@@ -73,7 +73,7 @@ export async function createServer(config: McpConfig = {}) {
   const server = new Server(
     {
       name: "@aifinpay/mcp",
-      version: "0.1.0-alpha.8",
+      version: "1.0.0",
     },
     {
       capabilities: {

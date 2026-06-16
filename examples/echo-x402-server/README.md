@@ -41,7 +41,7 @@ curl -s http://localhost:3000/.well-known/x402.json | jq .
 ## Test with the AiFinPay SDK
 
 ```bash
-npm install @aifinpay/agent@alpha
+npm install @aifinpay/agent
 node test-client.js
 ```
 
@@ -59,7 +59,7 @@ already-funded agent (load via `Agent.fromSecretB58(...)`), both end in
 | Env | Default | Purpose |
 |---|---|---|
 | `PORT` | `3000` | Listen port |
-| `AIFINPAY_API` | `https://aifinpay.company` | Where Seat PDA verification happens |
+| `AIFINPAY_API` | `https://aifinpay.io` | Where Seat PDA verification happens |
 | `PRICE_USD` | `0.001` | Quoted price per call (cosmetic — gate is binary today) |
 | `SERVICE_NAME` | `echo-x402` | Branding in 402 + 200 responses |
 

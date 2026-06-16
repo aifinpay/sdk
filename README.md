@@ -4,7 +4,7 @@
 [![npm @aifinpay/mcp](https://img.shields.io/npm/v/@aifinpay/mcp?label=%40aifinpay%2Fmcp&color=blue)](https://www.npmjs.com/package/@aifinpay/mcp)
 [![PyPI aifinpay-agent](https://img.shields.io/pypi/v/aifinpay-agent?color=blue)](https://pypi.org/project/aifinpay-agent/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
-[![Site](https://img.shields.io/badge/site-aifinpay.company-black.svg)](https://aifinpay.company)
+[![Site](https://img.shields.io/badge/site-aifinpay.io-black.svg)](https://aifinpay.io)
 [![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](https://modelcontextprotocol.io)
 
 **Stripe for autonomous AI agents.** One line of code — `agent.pay(url)` —
@@ -14,10 +14,10 @@ mainnet, then receives the gated response. Non-custodial. Live since
 
 ```bash
 # Python
-pip install aifinpay-agent --pre
+pip install aifinpay-agent
 
 # Node / TypeScript
-npm install @aifinpay/agent@alpha
+npm install @aifinpay/agent
 
 # MCP server (Claude Desktop, Cursor, Windsurf, Continue)
 npx @aifinpay/mcp
@@ -51,9 +51,9 @@ Cline) lives in [`MCP_CONFIG.md`](./MCP_CONFIG.md).
 
 | Package | Path | Install | Latest |
 |---|---|---|---|
-| **`aifinpay-agent`** (Python) | [`./python`](./python) | `pip install aifinpay-agent --pre` | `0.2.0a2` (alpha) |
-| **`@aifinpay/agent`** (Node / TypeScript) | [`./node`](./node) | `npm install @aifinpay/agent@alpha` | `0.3.0-alpha.0` (alpha) |
-| **`@aifinpay/mcp`** (MCP server) | [`./mcp`](./mcp) | `npx @aifinpay/mcp` | `0.1.0-alpha.2` (alpha) |
+| **`aifinpay-agent`** (Python) | [`./python`](./python) | `pip install aifinpay-agent` | `1.0.0` |
+| **`@aifinpay/agent`** (Node / TypeScript) | [`./node`](./node) | `npm install @aifinpay/agent` | `1.0.0` |
+| **`@aifinpay/mcp`** (MCP server) | [`./mcp`](./mcp) | `npx @aifinpay/mcp` | `1.0.0` |
 | Go SDK | — | `go get github.com/AiFinPay/sdk/go` | **soon** |
 | Rust SDK | — | `cargo add aifinpay-sdk` | **soon** |
 
@@ -142,7 +142,7 @@ sequenceDiagram
 ```
 
 For a partner who wants to **accept** AiFinPay payments, the simplest
-integration is a single HTTP call to `aifinpay.company/api/seat/<pubkey>`
+integration is a single HTTP call to `aifinpay.io/api/seat/<pubkey>`
 inside their existing API — no wallet, no chain library, no KYC. See
 [`examples/echo-x402-server`](./examples/echo-x402-server) for a working
 ~70-line reference.
@@ -215,8 +215,8 @@ sdk/
 
 ## Releasing
 
-Each package version-bumps independently. Both registries get prerelease
-tags so production users only see stable when explicitly opt-in.
+All three packages are published as stable `1.0.0` on PyPI and npm under
+the default (`latest`) tag, with semver-compatible updates from here.
 
 ```bash
 # Python
@@ -227,13 +227,13 @@ python -m twine upload --repository pypi dist/*
 # Node
 cd ../node
 npm run build
-npm publish --tag alpha
+npm publish
 
 # MCP
 cd ../mcp
 npm install                 # so it can resolve @aifinpay/agent
 npm run build
-npm publish --tag alpha
+npm publish
 ```
 
 ## Contributing
@@ -247,8 +247,8 @@ MIT — see [LICENSE](./LICENSE).
 
 ## Links
 
-- Site: https://aifinpay.company
-- Docs: https://aifinpay.company/docs
-- Manifesto: https://aifinpay.company/manifesto.json
+- Site: https://aifinpay.io
+- Docs: https://aifinpay.io/docs
+- Manifesto: https://aifinpay.io/manifesto.json
 - x402 protocol: https://www.x402.org
 - MCP spec: https://modelcontextprotocol.io

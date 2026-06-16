@@ -10,7 +10,7 @@
     "demo:sdk": "node test-client.js"
   },
   "dependencies": {
-    "@aifinpay/agent": "^0.2.0-alpha.2",
+    "@aifinpay/agent": "^1.0.0",
     "bs58": "^6.0.0",
     "express": "^5.0.0",
     "tweetnacl": "^1.0.3"

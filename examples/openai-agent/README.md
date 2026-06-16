@@ -6,7 +6,7 @@ agent can now autonomously call any x402-protected URL.
 ## Setup
 
 ```bash
-pip install aifinpay-agent --pre openai
+pip install aifinpay-agent openai
 export OPENAI_API_KEY=sk-...
 python agent.py
 ```

@@ -121,7 +121,7 @@ hard-coded BPS values set by the Gnosis Safe owner.
 - Pre-built x402 SDK in Python (`aifinpay-agent`), Node (`@aifinpay/agent`),
   and an MCP server (`@aifinpay/mcp`) — millions of agents already
   integrate this surface.
-- Discovery: appearance on the `/api/dashboard` and `aifinpay.company`
+- Discovery: appearance on the `/api/dashboard` and `aifinpay.io`
   marketplace pages.
 - Identity: agents have on-chain `AgentPassport` NFTs you can trust
   without doing your own KYC.

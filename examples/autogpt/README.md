@@ -10,7 +10,7 @@ on a fixed budget.
 ## Setup
 
 ```bash
-pip install aifinpay-agent --pre openai
+pip install aifinpay-agent openai
 export OPENAI_API_KEY=sk-...
 python loop.py
 ```

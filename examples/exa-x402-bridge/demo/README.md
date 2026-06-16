@@ -85,6 +85,6 @@ Once you have a clean MP4:
       VC platforms that won't render direct uploads.
 - [ ] **Pin a tweet** with the GIF + the actual Polygonscan tx hash so
       anyone can verify the transaction is real, not a mock.
-- [ ] **Embed on `aifinpay.company`** above-the-fold + on `/docs`.
+- [ ] **Embed on `aifinpay.io`** above-the-fold + on `/docs`.
 - [ ] **Send to first 5 partners** (Polygon ecosystem team, Cloudflare
       AI, Vercel MCP, Exa, Venice) with the pitch deck.

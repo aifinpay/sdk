@@ -55,7 +55,7 @@ function installMock(searchResult: unknown[] = []) {
           published_at: 1_700_000_000,
           created_at:   1_700_000_000,
         },
-        profile_url: `https://dashboard.aifinpay.company/network/agents/${path.split("/")[4]}`,
+        profile_url: `https://dashboard.aifinpay.io/network/agents/${path.split("/")[4]}`,
       }), { status: 200, headers: { "content-type": "application/json" } });
     }
     if (/\/api\/network\/agents\/0x[0-9a-f]{40}\/unpublish$/.test(path)) {

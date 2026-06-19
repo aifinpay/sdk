@@ -42,6 +42,9 @@ export function payWithSplitTool() {
       },
       required: ["chain", "merchant_wallet", "merchant_amount", "order_id"],
     },
+    // Returns on-chain instructions/invoice; does not itself broadcast funds.
+    annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
+    outputSchema: { type: "object" },
   };
 }
 
@@ -76,6 +79,7 @@ export async function runPayWithSplit(
     });
     return {
       content: [{ type: "text", text: JSON.stringify(invoice, null, 2) }],
+      structuredContent: invoice,
     };
   } catch (e) {
     const err = e as Error;
@@ -103,6 +107,8 @@ export function quoteSplitTool() {
       },
       required: ["chain", "merchant_amount"],
     },
+    annotations: { readOnlyHint: true, openWorldHint: false, destructiveHint: false },
+    outputSchema: { type: "object" },
   };
 }
 
@@ -121,6 +127,7 @@ export async function runQuoteSplit(
     const quote = await ctx.agent.inner.quoteSplit({ chain, merchantAmount });
     return {
       content: [{ type: "text", text: JSON.stringify(quote, null, 2) }],
+      structuredContent: quote,
     };
   } catch (e) {
     const err = e as Error;

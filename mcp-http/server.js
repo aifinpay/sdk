@@ -20,11 +20,29 @@ import rateLimit from "express-rate-limit";
 import crypto from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { createServer } from "@aifinpay/mcp";
+import { createServer, createDirectoryServer } from "@aifinpay/mcp";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const PORT = process.env.PORT || 3010;
 const PUBLIC_URL = process.env.MCP_PUBLIC_URL || "https://mcp.aifinpay.io/mcp";
+
+// Profile selects WHICH MCP server this process serves:
+//   connector (default) — full BYO-MCP server (createServer), payment execution,
+//                         OAuth-gateable. Lives at mcp.aifinpay.io/mcp.
+//   directory           — read-only server (createDirectoryServer): public tools,
+//                         NO agent identity, NO auth. The surface submitted to the
+//                         OpenAI ChatGPT App Directory.
+const MCP_PROFILE = (process.env.AIFINPAY_MCP_PROFILE || "connector").toLowerCase();
+const IS_DIRECTORY = MCP_PROFILE === "directory";
+
+// Build the per-session MCP server for the active profile. Directory has no agent.
+async function buildMcpServer(opts) {
+  if (IS_DIRECTORY) {
+    const { server } = await createDirectoryServer({ log: opts.logFn });
+    return { server, agent: null };
+  }
+  return createServer(opts); // { server, agent }
+}
 
 // ── OAuth 2.1 config (ChatGPT Apps linking flow, RFC 9728 / 8414) ──────────
 // Discovery lives on THIS server; the authorization server is your IdP
@@ -34,7 +52,9 @@ const ISSUER = process.env.AIFINPAY_OAUTH_ISSUER || ""; // e.g. https://auth.aif
 const RESOURCE = process.env.MCP_RESOURCE_URL || PUBLIC_URL; // token `aud` must equal this
 const SCOPES = (process.env.AIFINPAY_OAUTH_SCOPES ||
   "openid email profile aifinpay.read aifinpay.pay").split(/\s+/).filter(Boolean);
-const AUTH_REQUIRED = process.env.AIFINPAY_AUTH_REQUIRED === "true";
+// Directory profile is ALWAYS anonymous (read-only public data) — force auth off
+// regardless of env so the OpenAI reviewer can call every tool with no login.
+const AUTH_REQUIRED = process.env.AIFINPAY_AUTH_REQUIRED === "true" && !IS_DIRECTORY;
 const PRM_URL = RESOURCE.replace(/\/mcp$/, "") + "/.well-known/oauth-protected-resource";
 const REQUIRED_SCOPE = process.env.AIFINPAY_REQUIRED_SCOPE || ""; // e.g. "aifinpay.read"
 
@@ -172,7 +192,7 @@ async function maybeAuth(req, res, next) {
 let _cachedToolspec = null;
 async function buildToolspec() {
   if (_cachedToolspec) return _cachedToolspec;
-  const { server } = await createServer({ logFn: () => {} });
+  const { server } = await buildMcpServer({ logFn: () => {} });
   // Pull out the registered tool handlers — the Server stores them in
   // a private _requestHandlers map keyed by method name. Easier:
   // invoke ListToolsRequest manually via the registered handler.
@@ -248,7 +268,7 @@ app.post("/mcp", mcpLimiter, maybeAuth, async (req, res) => {
         sessionIdGenerator: () => crypto.randomUUID(),
         onsessioninitialized: (id) => {
           sessions.set(id, { transport, server, agent });
-          sessionLog("info", `session init id=${id} agent=${agent.address}`);
+          sessionLog("info", `session init id=${id} agent=${agent ? agent.address : "directory(read-only)"}`);
         },
       });
 
@@ -265,8 +285,10 @@ app.post("/mcp", mcpLimiter, maybeAuth, async (req, res) => {
       // only walk the tool list. End users connecting persistently can
       // pass AIFINPAY_AGENT_SECRET through their MCP client env (this
       // happens via the stdio path; the HTTP path is for listings).
-      // createServer became async in @aifinpay/mcp 0.1.0-alpha.3 — must await
-      const { server, agent } = await createServer({ logFn: sessionLog });
+      // createServer became async in @aifinpay/mcp 0.1.0-alpha.3 — must await.
+      // buildMcpServer picks connector vs directory profile (agent is null for
+      // the read-only directory profile).
+      const { server, agent } = await buildMcpServer({ logFn: sessionLog });
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;

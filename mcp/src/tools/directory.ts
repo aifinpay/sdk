@@ -80,23 +80,14 @@ export function directoryTools() {
         "supported networks. Read-only; returns the public provider catalog.",
       inputSchema: { type: "object", properties: {} },
       annotations: RO,
+      // Permissive: the upstream provider catalog is the source of truth and its
+      // leaf field types vary (e.g. price_usd may be a number or a string for
+      // range/tier pricing). The MCP client validates structuredContent against
+      // this schema strictly, so we only assert the top-level shape.
       outputSchema: {
         type: "object",
         properties: {
-          providers: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                name: { type: "string" },
-                display_name: { type: "string" },
-                service_type: { type: "string" },
-                price_usd: { type: "number" },
-                preferred_chain: { type: "string" },
-                accepted_chains: { type: "array", items: { type: "string" } },
-              },
-            },
-          },
+          providers: { type: "array", items: { type: "object" } },
         },
       },
     },

@@ -50,13 +50,23 @@ async function buildMcpServer(opts) {
 // an IdP is wired, so existing anonymous BYO-MCP connectors keep working.
 const ISSUER = process.env.AIFINPAY_OAUTH_ISSUER || ""; // e.g. https://auth.aifinpay.io
 const RESOURCE = process.env.MCP_RESOURCE_URL || PUBLIC_URL; // token `aud` must equal this
+// Default to standard OIDC scopes the IdP (Stytch) actually supports. Custom
+// scopes (aifinpay.read/pay) are NOT registered in the IdP and caused "invalid
+// scope" — re-add them only once they're registered AND enforced server-side.
 const SCOPES = (process.env.AIFINPAY_OAUTH_SCOPES ||
-  "openid email profile aifinpay.read aifinpay.pay").split(/\s+/).filter(Boolean);
+  "openid profile email offline_access").split(/\s+/).filter(Boolean);
 // Directory profile is ALWAYS anonymous (read-only public data) — force auth off
 // regardless of env so the OpenAI reviewer can call every tool with no login.
 const AUTH_REQUIRED = process.env.AIFINPAY_AUTH_REQUIRED === "true" && !IS_DIRECTORY;
 const PRM_URL = RESOURCE.replace(/\/mcp$/, "") + "/.well-known/oauth-protected-resource";
 const REQUIRED_SCOPE = process.env.AIFINPAY_REQUIRED_SCOPE || ""; // e.g. "aifinpay.read"
+// Accepted token audiences (comma-separated). IdPs differ: Stytch sets `aud` to
+// the project_id, others to the resource URL (RFC 8707) or the client_id. We
+// verify signature+iss+exp via jose, then check aud against this allow-list
+// ourselves. Set AIFINPAY_OAUTH_AUDIENCE to your Stytch project_id (+ optionally
+// the resource URL). Defaults to the resource URL.
+const AUDIENCES = (process.env.AIFINPAY_OAUTH_AUDIENCE || RESOURCE)
+  .split(",").map((x) => x.trim()).filter(Boolean);
 
 const app = express();
 app.set("trust proxy", 1);
@@ -169,10 +179,23 @@ async function maybeAuth(req, res, next) {
   if (!token) return challenge();
   try {
     const jwks = await getJwks();
+    // Verify signature + issuer + expiry first; audience is checked below against
+    // AUDIENCES, because IdPs disagree on what they put in `aud`.
     const { payload } = await jwtVerify(token, jwks, {
       issuer: ISSUER || undefined,
-      audience: RESOURCE, // ChatGPT mints the token with aud = our resource URL
     });
+    const tokenAuds = Array.isArray(payload.aud)
+      ? payload.aud
+      : payload.aud
+      ? [payload.aud]
+      : [];
+    if (!tokenAuds.some((a) => AUDIENCES.includes(a))) {
+      sessionLog(
+        "warn",
+        `aud mismatch: token aud=${JSON.stringify(payload.aud)} azp=${payload.azp || payload.client_id || ""} sub=${payload.sub || ""} — expected one of ${JSON.stringify(AUDIENCES)}`,
+      );
+      return challenge("invalid_token");
+    }
     if (REQUIRED_SCOPE) {
       const scopes = String(payload.scope || payload.scp || "").split(/\s+/).filter(Boolean);
       if (!scopes.includes(REQUIRED_SCOPE)) return challenge("insufficient_scope");

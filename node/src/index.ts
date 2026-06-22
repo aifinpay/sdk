@@ -24,6 +24,9 @@ export { AiFinPayAgent } from "./unifiedAgent.js";
 export type {
   AiFinPayAgentOptions,
   CallOptions,
+  CapabilityOptions,
+  DiscoverOptions,
+  DiscoveredProvider,
   ChainId,
   ProviderEntry,
   BalanceSnapshot,

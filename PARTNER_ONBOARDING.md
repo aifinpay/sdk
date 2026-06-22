@@ -30,7 +30,32 @@ custodial arrangement.
 - Compliance / KYC — non-custodial. Funds settle on-chain in the splitter contract.
 - A subscription contract or revenue-share agreement — protocol fee is hard-coded in the splitter, automatically routed.
 
-## Step-by-step
+## Fast path — config only, no code (recommended)
+
+If your upstream is a normal JSON HTTP API, you don't need to fork or edit any
+code. Use the env-driven [`_generic-x402-bridge`](examples/_generic-x402-bridge)
+and scaffold a config in one command:
+
+```bash
+node scripts/new-provider.mjs \
+  --slug mybrand --name "MyBrand AI" --category inference \
+  --upstream-url https://api.mybrand.example/v1/chat/completions \
+  --auth-style bearer --route-path /chat/completions --price-usd 0.02
+```
+
+This writes `examples/mybrand-x402-bridge/.env` and prints the `services.json`
+registry entry to paste. Then add your API key and run:
+
+```bash
+cd examples/_generic-x402-bridge && npm install
+node --env-file=../mybrand-x402-bridge/.env server.js
+```
+
+The three knobs (`UPSTREAM_URL`, `UPSTREAM_AUTH_STYLE`, `PRICE_*`) are all env
+vars — skip to "Tell us your merchant address" below. The manual fork path that
+follows is only needed when your upstream needs custom request shaping.
+
+## Step-by-step (manual fork)
 
 ### 1. Fork the example
 

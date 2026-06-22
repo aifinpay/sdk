@@ -79,6 +79,52 @@ export interface CallOptions {
   signal?:     AbortSignal;
 }
 
+// ── Discovery (Gateway) ─────────────────────────────────────────────────────
+
+/** A provider as seen through the Discovery surface (`/api/registry`): the
+ *  full catalog record plus live connectivity and — when returned by the
+ *  routing endpoint (`/api/registry/best`) — a transparent score. */
+export interface DiscoveredProvider {
+  slug:          string;
+  name:          string;
+  display_name?: string;
+  service_type?: string | null;
+  category?:     string | null;
+  tagline?:      string | null;
+  url?:          string | null;
+  logo?:         string | null;
+  price_usd:     number | null;
+  availability:  "available" | "recruiting";
+  status:        "live" | "down" | "unknown";
+  latency_ms:    number | null;
+  last_check:    number | null;
+  modes?:        Record<string, unknown>;
+  on_chain?:     unknown;
+  score?:        number;
+  score_breakdown?: Record<string, number>;
+}
+
+export interface DiscoverOptions {
+  category?: string;
+  q?:        string;
+  limit?:    number;
+}
+
+/** Options shared by the convenience capability methods (webSearch/image/…). */
+export interface CapabilityOptions {
+  /** Free-text refinement for provider selection (matched against the catalog). */
+  q?:           string;
+  /** Cap candidate providers at this per-call price during selection. */
+  maxPriceUsd?: number;
+  /** Skip routing and force a specific provider slug. */
+  provider?:    string;
+  cost?:        number;
+  chain?:       ChainId;
+  method?:      string;
+  timeoutMs?:   number;
+  signal?:      AbortSignal;
+}
+
 export interface BalanceSnapshot {
   agent_balance_usd: number;
   chains: {
@@ -496,6 +542,117 @@ export class AiFinPayAgent {
     return hit;
   }
 
+  // ── Discovery + routing (Gateway) ───────────────────────────────────────────
+  //
+  // The vision: an agent asks AiFinPay for a *capability* ("search this",
+  // "voice this") and AiFinPay finds the best provider, pays, and returns the
+  // result. Provider selection is server-side (`/api/registry/best`) so the
+  // ranking is identical whether you call via the SDK, MCP, or raw HTTP. These
+  // methods are the convenience layer over those endpoints.
+
+  /**
+   * Browse the provider catalog. Filter by `category` (e.g. "search",
+   * "inference", "image", "speech") and/or free-text `q`. Each entry carries
+   * live connectivity (`status`, `latency_ms`) so you can rank client-side too.
+   *
+   * Note: this discovers *services* (the marketplace). To discover *agents*
+   * published on the public network, use `search()`.
+   */
+  async discover(opts: DiscoverOptions = {}): Promise<DiscoveredProvider[]> {
+    const base = this.inner.baseUrl;
+    const params = new URLSearchParams();
+    if (opts.category) params.set("category", opts.category);
+    if (opts.q)        params.set("q", opts.q);
+    const r = await fetch(`${base}/api/registry?${params.toString()}`);
+    if (!r.ok) throw new AiFinPayError(`discover ${base} → ${r.status}`);
+    const j = (await r.json()) as { providers?: DiscoveredProvider[] };
+    const list = j.providers ?? [];
+    return opts.limit != null ? list.slice(0, Math.max(0, opts.limit)) : list;
+  }
+
+  /**
+   * Automatic provider selection. Asks the gateway for the single best
+   * available provider in a category (ranked by price, latency, liveness,
+   * on-chain trust). Throws `ProviderUnknownError` when nothing payable
+   * matches. Pass `maxPriceUsd` to cap the candidate set.
+   */
+  async pickProvider(
+    category: string,
+    opts: { q?: string; maxPriceUsd?: number } = {},
+  ): Promise<DiscoveredProvider> {
+    const base = this.inner.baseUrl;
+    const params = new URLSearchParams();
+    if (category)            params.set("category", category);
+    if (opts.q)              params.set("q", opts.q);
+    if (opts.maxPriceUsd != null) params.set("max_price_usd", String(opts.maxPriceUsd));
+    const r = await fetch(`${base}/api/registry/best?${params.toString()}`);
+    if (r.status === 404) {
+      throw new ProviderUnknownError(
+        `No available provider for category "${category}"${opts.q ? ` matching "${opts.q}"` : ""}`,
+      );
+    }
+    if (!r.ok) throw new AiFinPayError(`pickProvider ${base} → ${r.status}`);
+    const j = (await r.json()) as { best?: DiscoveredProvider };
+    if (!j.best) throw new ProviderUnknownError(`No best provider returned for "${category}"`);
+    return j.best;
+  }
+
+  /**
+   * Capability-first paid call: pick the best provider for `category`, pay it,
+   * and return the upstream response — the "agent talks only to AiFinPay" flow.
+   * Pass `opts.provider` to skip routing and force a specific provider.
+   * Resolves to `null` only when a budget cap is hit in "skip" mode (see call()).
+   */
+  async capability(
+    category: string,
+    body: unknown,
+    opts: CapabilityOptions = {},
+  ): Promise<Response | null> {
+    let providerName = opts.provider;
+    if (!providerName) {
+      const chosen = await this.pickProvider(category, { q: opts.q, maxPriceUsd: opts.maxPriceUsd });
+      providerName = chosen.name || chosen.slug;
+    }
+    return this.call({
+      provider:  providerName,
+      body,
+      cost:      opts.cost,
+      chain:     opts.chain,
+      method:    opts.method,
+      timeoutMs: opts.timeoutMs,
+      signal:    opts.signal,
+    });
+  }
+
+  /**
+   * Web search via the best available search provider.
+   *
+   * Named `webSearch` (not `search`) on purpose: `search()` already searches
+   * the public *agent* network directory and is part of the published 1.0 API.
+   * `webSearch()` is the marketplace capability the vision calls `search()`.
+   */
+  async webSearch(query: string | Record<string, unknown>, opts: CapabilityOptions = {}): Promise<Response | null> {
+    const body = typeof query === "string" ? { query } : query;
+    return this.capability("search", body, opts);
+  }
+
+  /** Image generation via the best available image provider. */
+  async image(prompt: string | Record<string, unknown>, opts: CapabilityOptions = {}): Promise<Response | null> {
+    const body = typeof prompt === "string" ? { prompt } : prompt;
+    return this.capability("image", body, opts);
+  }
+
+  /** Text-to-speech via the best available speech provider. */
+  async voice(text: string | Record<string, unknown>, opts: CapabilityOptions = {}): Promise<Response | null> {
+    const body = typeof text === "string" ? { input: text } : text;
+    return this.capability("speech", body, opts);
+  }
+
+  /** LLM inference via the best available inference/compute provider. */
+  async infer(body: unknown, opts: CapabilityOptions = {}): Promise<Response | null> {
+    return this.capability("inference", body, opts);
+  }
+
   // ── Network directory ─────────────────────────────────────────────────────
 
   /**
@@ -857,6 +1014,8 @@ export class AiFinPayAgent {
       if (provider.service_type === "inference") return "/chat/completions";
       if (provider.service_type === "compute")   return "/run";
       if (provider.service_type === "analytics") return "/query";
+      if (provider.service_type === "image")     return "/images/generations";
+      if (provider.service_type === "speech")    return "/audio/speech";
       return "/";
     })();
 

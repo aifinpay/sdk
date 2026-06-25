@@ -6,11 +6,29 @@ MCP-aware agent runtime — your agent can now buy services autonomously.
 
 ## Tools
 
+### Payment / agent
 | Tool | What it does |
 |---|---|
-| `payable_fetch(url, opts?)` | Fetch any URL. On 402, auto-detect facilitator, sign, retry. |
-| `agent_address()` | Return the agent's Solana base58 pubkey (so you know where to fund). |
-| `agent_quote(url)` | Inspect a 402 challenge without paying. Shows the merchant's quoted amount + facilitator flavor. |
+| `payable_fetch(url, opts?)` | Fetch any URL. On HTTP 402, auto-detect the facilitator, sign, pay, and retry. |
+| `agent_call({provider, body})` | Pay a registered AiFinPay provider and return its response (unified call). |
+| `agent_quote(url)` | Inspect a 402 challenge without paying — quoted amount + facilitator flavor. |
+| `agent_address()` | Return the agent's address so you know where to fund it. |
+| `agent_claim_self(...)` | Publish/claim this agent on the public AiFinPay network directory. |
+| `pay_with_split(...)` | Execute a fee-on-top (B2B) split payment. |
+| `quote_split(...)` | Preview the fee-on-top split breakdown without paying. |
+
+### Marketplace directory (read-only)
+| Tool | What it does |
+|---|---|
+| `list_providers()` | List the AI services available through AiFinPay with per-call prices. |
+| `provider_info(name)` | Details for one provider (price, networks, service type). |
+| `provider_status()` | Which provider bridges are currently reachable. |
+| `service_coverage()` | Which categories AiFinPay covers and the providers in each. |
+| `network_stats()` | Public protocol statistics. |
+| `leaderboard()` | Public on-chain leaderboard of AiFinPay agents. |
+| `quote_cost(...)` | Preview the fee-on-top cost for a given price (no payment). |
+| `verify_passport(pubkey)` | Whether a key holds an AiFinPay AgentPassport. |
+| `agent_profile(address)` | Public profile + activity summary for an agent. |
 
 ## Install
 
@@ -38,8 +56,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop. Now Claude can call `payable_fetch`, `agent_address`,
-and `agent_quote` like any other tool.
+Restart Claude Desktop. Now Claude can call any of the tools above —
+`payable_fetch`, `agent_call`, `pay_with_split`, and the read-only
+marketplace directory — like any other tool.
 
 ## First run — generating an agent
 

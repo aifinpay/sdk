@@ -65,9 +65,11 @@ AI agent. The SDK auto-detects the facilitator flavor (AiFinPay native,
 Coinbase x402, …), signs an Ed25519 challenge, retries the request, and
 returns the response.
 
-Same agent, drop into Claude Desktop's MCP config and the LLM gets
-five tools (`payable_fetch`, `agent_address`, `agent_quote`,
-`pay_with_split`, `quote_split`) for autonomous payment loops.
+Same agent, drop into Claude Desktop's MCP config and the LLM gets a
+full toolset for autonomous payment loops: payment tools (`payable_fetch`,
+`agent_call`, `pay_with_split`, `quote_split`, `agent_quote`,
+`agent_address`, `agent_claim_self`) plus a read-only marketplace
+directory (`list_providers`, `network_stats`, `leaderboard`, … 16 total).
 
 ## Quick start
 

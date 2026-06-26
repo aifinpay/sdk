@@ -277,7 +277,7 @@ async function verifyTx(txHash, expectedOrderId) {
   };
 }
 
-async function forwardUpstream(req, res) {
+async function forwardUpstream(req, res, commit) {
   let upstreamRes;
   try {
     upstreamRes = await fetch(UPSTREAM_URL, {
@@ -288,6 +288,10 @@ async function forwardUpstream(req, res) {
     let body; try { body = await upstreamRes.text(); } catch { body = "<unreadable>"; }
     return res.status(502).json({ error: "upstream_5xx", upstream_status: upstreamRes.status, upstream_body: body.slice(0, 500) });
   }
+  // Upstream succeeded — settle the order NOW (not before forwarding), so an
+  // upstream failure above leaves the order replayable and the agent never
+  // pays for a 5xx.
+  if (commit) { try { await commit(); } catch {} }
   const text = await upstreamRes.text();
   return res.status(upstreamRes.status).type("application/json").send(text);
 }
@@ -352,11 +356,10 @@ app.post(ROUTE_PATH, challengeLimiter, async (req, res) => {
     if (!(await hasOrder(orderId))) return res.status(409).json({ error: "unknown_or_expired_order_id" });
     const verifiedSol = await verifySolanaTx(solanaTx, orderId);
     if (!verifiedSol.ok) return res.status(402).json({ error: "payment_verification_failed", detail: verifiedSol.reason });
-    await Promise.all([consumeOrder(orderId), markTxConsumed(solanaTx)]);
     res.set("x-payment-receipt", JSON.stringify({
       paid_by: verifiedSol.payer, chain: "solana", tx_hash: solanaTx, total_lamports: PRICE_LAMPORTS, order_id: orderId,
     }));
-    return forwardUpstream(req, res);
+    return forwardUpstream(req, res, () => Promise.all([consumeOrder(orderId), markTxConsumed(solanaTx)]));
   }
 
   // 3. Legacy AiFinPay pay-matic path (native POL)
@@ -368,13 +371,12 @@ app.post(ROUTE_PATH, challengeLimiter, async (req, res) => {
   }
   const verified = await verifyTx(txHash, orderId);
   if (!verified.ok) return res.status(402).json({ error: "payment_verification_failed", detail: verified.reason });
-  await Promise.all([consumeOrder(orderId), markTxConsumed(txHash)]);
   res.set("x-payment-receipt", JSON.stringify({
     paid_by: verified.payer, total_amount_wei: verified.totalAmountWei,
     merchant_amount_wei: verified.merchantAmountWei, tx_hash: txHash,
     block: verified.blockNumber, splitter: SPLITTER_ADDRESS, order_id: orderId,
   }));
-  return forwardUpstream(req, res);
+  return forwardUpstream(req, res, () => Promise.all([consumeOrder(orderId), markTxConsumed(txHash)]));
 });
 
 app.listen(PORT, () => {
